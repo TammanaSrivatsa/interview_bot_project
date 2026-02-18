@@ -1,11 +1,4 @@
-Perfect 🔥
-You’ve built a **serious AI system**, so your GitHub README should look professional and impressive.
-
-Below is a clean, strong, FAANG-level README text you can directly paste into GitHub.
-
----
-
-# 🚀 AI Interview Platform (Berribot-Style)
+🚀 AI Interview Platform (Berribot-Style)
 
 An AI-powered, real-time technical interview simulation platform that conducts dynamic, time-bound interviews based on the candidate’s resume and job description.
 
