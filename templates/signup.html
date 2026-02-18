@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-5">
+        <div class="card shadow p-4">
+            <h4 class="text-center mb-4">Signup</h4>
+
+            <form method="post" action="/signup">
+
+                <select class="form-control mb-3" name="role">
+                    <option value="candidate">Candidate</option>
+                    <option value="hr">HR</option>
+                </select>
+
+                <input class="form-control mb-3" name="name" placeholder="Name / Company Name">
+                <input class="form-control mb-3" name="email" placeholder="Email">
+                <input type="password" class="form-control mb-3" name="password" placeholder="Password">
+                <input class="form-control mb-3" name="gender" placeholder="Gender (Only for Candidate)">
+                
+                <button class="btn btn-success w-100">Signup</button>
+            </form>
+
+        </div>
+    </div>
+</div>
+{% endblock %}

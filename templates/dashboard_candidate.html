@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<h2 class="mb-4">Candidate Dashboard</h2>
+
+<!-- ================= SUCCESS MESSAGE ================= -->
+{% if success_message %}
+<div id="success-alert" class="alert alert-success mt-3">
+    {{ success_message }}
+</div>
+{% endif %}
+
+<!-- ================= Resume Upload Section ================= -->
+<div class="card p-4 shadow mb-4">
+    <h5>Upload Resume</h5>
+
+    <form method="post" action="/upload_resume" enctype="multipart/form-data">
+        <input type="file" name="resume" class="form-control mb-3" required>
+        <button class="btn btn-success">Upload Resume</button>
+    </form>
+
+    {% if uploaded_resume %}
+    <div class="alert alert-info mt-3">
+        Uploaded Resume:
+        <strong>{{ uploaded_resume }}</strong>
+    </div>
+    {% endif %}
+</div>
+
+<!-- ================= AI RESULT SECTION ================= -->
+{% if result %}
+<div class="card p-4 shadow">
+
+    <h5>🤖 AI Evaluation Result</h5>
+
+    <h4 class="mt-3">
+        Score:
+        <span class="badge bg-primary">
+            {{ result.score }}%
+        </span>
+    </h4>
+
+    {% if result.shortlisted %}
+
+        <div class="alert alert-success mt-3">
+            🎉 Congratulations! You are Shortlisted.
+        </div>
+
+        {% if not result.interview_date %}
+        <!-- Select Date -->
+        <form method="post" action="/select_interview_date">
+            <input type="hidden" name="result_id" value="{{ result.id }}">
+
+            <label class="mt-2">Select Interview Date & Time</label>
+            <input type="datetime-local"
+                   name="interview_date"
+                   class="form-control mb-3"
+                   required>
+
+            <button class="btn btn-primary w-100">
+                Confirm Interview
+            </button>
+        </form>
+
+        {% else %}
+        <!-- Date Scheduled -->
+        <div class="alert alert-info mt-3">
+            📅 Interview Scheduled On:
+            <strong>{{ result.interview_date }}</strong>
+        </div>
+
+        <div class="alert alert-secondary mt-2">
+            📧 Interview link has been sent to your registered email.
+            Please check your inbox to start the interview.
+        </div>
+        {% endif %}
+
+    {% else %}
+
+        <div class="alert alert-danger mt-3">
+            ❌ Unfortunately, you are Rejected.
+        </div>
+
+    {% endif %}
+
+    <!-- ================= AI Explanation ================= -->
+    {% if result.explanation %}
+    <hr>
+    <h6>📊 Detailed Analysis</h6>
+
+    <ul class="list-group list-group-flush">
+
+        {% if result.explanation.semantic_score %}
+        <li class="list-group-item">
+            <strong>Semantic Match:</strong>
+            {{ result.explanation.semantic_score }}%
+        </li>
+        {% endif %}
+
+        {% if result.explanation.skill_score %}
+        <li class="list-group-item">
+            <strong>Skill Match:</strong>
+            {{ result.explanation.skill_score }}%
+        </li>
+        {% endif %}
+
+        {% if result.explanation.matched_skills %}
+        <li class="list-group-item">
+            <strong>Matched Skills:</strong>
+            {{ result.explanation.matched_skills | join(', ') }}
+        </li>
+        {% endif %}
+
+        {% if result.explanation.education_reason %}
+        <li class="list-group-item">
+            <strong>Education Check:</strong>
+            {{ result.explanation.education_reason }}
+        </li>
+        {% endif %}
+
+        {% if result.explanation.experience_reason %}
+        <li class="list-group-item">
+            <strong>Experience Check:</strong>
+            {{ result.explanation.experience_reason }}
+        </li>
+        {% endif %}
+
+    </ul>
+    {% endif %}
+
+</div>
+{% endif %}
+
+<!-- ================= Auto Fade Script ================= -->
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const alertBox = document.getElementById("success-alert");
+
+    if (alertBox) {
+        setTimeout(function () {
+            alertBox.style.transition = "opacity 0.8s ease";
+            alertBox.style.opacity = "0";
+            setTimeout(function () {
+                alertBox.remove();
+            }, 800);
+        }, 3000);
+    }
+});
+</script>
+
+{% endblock %}
