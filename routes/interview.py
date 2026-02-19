@@ -14,7 +14,7 @@ router = APIRouter()
 templates = Jinja2Templates(directory="templates")
 
 # 🔥 Change interview duration here (in minutes)
-INTERVIEW_DURATION = 2
+INTERVIEW_DURATION = 20
 
 
 # ---------------------------
@@ -35,6 +35,7 @@ def get_db():
 def interview_page(result_id: int, request: Request, token: str = None, db: Session = Depends(get_db)):
 
     result = db.query(Result).filter(Result.id == result_id).first()
+
     if not result or not token or token != result.interview_token or not result.shortlisted:
         return RedirectResponse("/", status_code=303)
 
@@ -44,11 +45,18 @@ def interview_page(result_id: int, request: Request, token: str = None, db: Sess
     if not candidate or not job:
         return RedirectResponse("/", status_code=303)
 
-    return templates.TemplateResponse(
-        "interview.html",
-        {"request": request, "candidate": candidate, "result": result}
-    )
+    # 🔥 CRITICAL FIX → Reset interview session completely
+    request.session.clear()
 
+    return templates.TemplateResponse(
+    "interview.html",
+    {
+        "request": request,
+        "candidate": candidate,
+        "result": result,
+        "interview_duration": INTERVIEW_DURATION
+    }
+)
 
 # ---------------------------
 # Generate Next Question
@@ -72,10 +80,13 @@ def generate_next_question(
         return {"question": "Interview session error."}
 
     # --------------------------------------------------
-    # SESSION INITIALIZATION
-    # --------------------------------------------------
-    if "interview_start" not in request.session:
+# SESSION INITIALIZATION (Safe & Clean)
+# --------------------------------------------------
+    if request.session.get("interview_initialized") is None:
+
         request.session.clear()
+
+        request.session["interview_initialized"] = True
         request.session["interview_start"] = str(datetime.now())
         request.session["asked_questions"] = ""
         request.session["question_count"] = 0
@@ -85,6 +96,7 @@ def generate_next_question(
         request.session["phase"] = "intro"
         request.session["followup_depth"] = 0
         request.session["current_topic"] = None
+
 
     # --------------------------------------------------
     # TIME CONTROL

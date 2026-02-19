@@ -7,10 +7,10 @@
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h5>Time Remaining:</h5>
     <h4 id="countdown-timer" class="text-danger fw-bold">
-        02:00
-    </h4>
-</div>
+    {{ "%02d:00"|format(interview_duration) }}
+</h4>
 
+</div>
 
 <div class="card p-4 shadow">
 
@@ -29,7 +29,7 @@
     <!-- 🤖 Question Display -->
     <h5>Interview Question</h5>
     <div id="question-box" class="alert alert-info">
-        Waiting to start interview...
+        Preparing your AI interview...
     </div>
 
     <!-- 🗣 Candidate Answer -->
@@ -42,7 +42,8 @@
 
     <br>
 
-    <button onclick="startInterview({{ result.id }})"
+    <button id="startBtn"
+            onclick="startInterview({{ result.id }})"
             class="btn btn-success">
         Start Interview
     </button>
@@ -50,6 +51,8 @@
 </div>
 
 <script>
+
+const candidateName = "{{ candidate.name }}";
 
 let recognition;
 let silenceTimer;
@@ -59,7 +62,7 @@ let countdownInterval;
 let isAnswering = false;
 let interviewStarted = false;
 
-const TOTAL_INTERVIEW_MINUTES = 2;   // MUST match backend
+const TOTAL_INTERVIEW_MINUTES = {{ interview_duration }};
 const QUESTION_TIME = TOTAL_INTERVIEW_MINUTES <= 2 ? 15000 : 25000;
 const SILENCE_LIMIT = 5000;
 
@@ -70,6 +73,25 @@ const answerBox = document.getElementById("answerBox");
 const video = document.getElementById("video");
 const timerDisplay = document.getElementById("countdown-timer");
 
+
+/* =========================================
+   🔊 SPEAK
+========================================= */
+
+function speak(text, callback=null) {
+
+    window.speechSynthesis.cancel();
+
+    const speech = new SpeechSynthesisUtterance(text);
+    speech.rate = 1;
+    speech.pitch = 1;
+
+    speech.onend = function() {
+        if (callback) callback();
+    };
+
+    window.speechSynthesis.speak(speech);
+}
 
 
 /* =========================================
@@ -113,7 +135,6 @@ function startCountdown() {
 }
 
 
-
 /* =========================================
    🔴 FORCE END
 ========================================= */
@@ -129,7 +150,6 @@ function forceInterviewEnd() {
 
     isAnswering = false;
 }
-
 
 
 /* =========================================
@@ -149,28 +169,6 @@ async function startCamera() {
 }
 
 
-
-/* =========================================
-   🔊 SPEAK
-========================================= */
-
-function speak(text, callback=null) {
-
-    window.speechSynthesis.cancel();
-
-    const speech = new SpeechSynthesisUtterance(text);
-    speech.rate = 1;
-    speech.pitch = 1;
-
-    speech.onend = function() {
-        if (callback) callback();
-    };
-
-    window.speechSynthesis.speak(speech);
-}
-
-
-
 /* =========================================
    ⏳ HARD QUESTION TIMER
 ========================================= */
@@ -183,7 +181,6 @@ function startHardTimer(resultId) {
         moveToNextQuestion(resultId, answerBox.value);
     }, QUESTION_TIME);
 }
-
 
 
 /* =========================================
@@ -226,7 +223,6 @@ function startListening(resultId) {
 
     recognition.start();
 }
-
 
 
 /* =========================================
@@ -273,7 +269,6 @@ function moveToNextQuestion(resultId, lastAnswer) {
 }
 
 
-
 /* =========================================
    🚀 START INTERVIEW
 ========================================= */
@@ -283,32 +278,38 @@ function startInterview(resultId) {
     if (interviewStarted) return;
     interviewStarted = true;
 
-    startCamera();
-    startCountdown();
+    // 👇 Intro played AFTER user interaction (allowed by browser)
+    const introText = `Hello ${candidateName}. 
+    Welcome to your AI technical interview session. 
+    Let us begin.`;
 
-    fetch("/generate-next-question", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: `result_id=${resultId}&last_answer=`
-    })
-    .then(res => res.json())
-    .then(data => {
+    speak(introText, () => {
 
-        if (!data || !data.question) {
-            questionBox.innerText = "Error generating question.";
-            return;
-        }
+        startCamera();
+        startCountdown();
 
-        questionBox.innerText = data.question;
+        fetch("/generate-next-question", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: `result_id=${resultId}&last_answer=`
+        })
+        .then(res => res.json())
+        .then(data => {
 
-        speak(data.question, () => {
-            startListening(resultId);
+            if (!data || !data.question) {
+                questionBox.innerText = "Error generating question.";
+                return;
+            }
+
+            questionBox.innerText = data.question;
+
+            speak(data.question, () => {
+                startListening(resultId);
+            });
         });
+
     });
 }
 
 </script>
-
-
-
 {% endblock %}
