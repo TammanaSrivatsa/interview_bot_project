@@ -1,0 +1,29 @@
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&family=Sora:wght@600;700&display=swap");
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  font-family: "Plus Jakarta Sans", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(33, 115, 190, 0.18), transparent 45%),
+    radial-gradient(circle at 100% 0%, rgba(10, 61, 98, 0.18), transparent 35%),
+    linear-gradient(180deg, #f3f7fd 0%, #e8eff9 100%);
+  color: #0d2840;
+}
+
+a {
+  color: #0a3d62;
+  text-decoration: none;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: "Sora", "Plus Jakarta Sans", sans-serif;
+  letter-spacing: 0.2px;
+}

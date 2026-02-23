@@ -43,6 +43,7 @@ class JobDescription(Base):
 
     id = Column(Integer, primary_key=True)
     company_id = Column(Integer, ForeignKey("hr.id"))
+    jd_title = Column(String(150), nullable=True)
     jd_text = Column(String)
     skill_scores = Column(JSON)
     gender_requirement = Column(String(50))
