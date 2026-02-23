@@ -1,238 +1,193 @@
-🚀 AI Interview Platform (Berribot-Style)
+# AI Interview Platform
 
-An AI-powered, real-time technical interview simulation platform that conducts dynamic, time-bound interviews based on the candidate’s resume and job description.
+An AI-driven interview platform with:
+- FastAPI backend (API-only, session-based auth)
+- React + Vite frontend
+- Resume/JD matching
+- Dynamic interview question flow
+- Camera, microphone, and voice-input support for interview sessions
 
-This system behaves like an intelligent FAANG-style interviewer — asking adaptive follow-up questions, analyzing silence, shifting phases automatically, and managing interview timing in real time.
+## Current Architecture
 
----
+This project is now split into:
 
-## 🧠 Key Features
+1. Backend (`main.py`, `routes/api_routes.py`)
+- Serves JSON APIs under `/api/*`
+- Handles authentication, candidate workflow, HR workflow, and interview flow
+- Stores data in SQLite by default (`app.db`)
 
-### 🎯 Resume + JD Based Dynamic Questioning
+2. Frontend (`interview-frontend/`)
+- React app served by Vite
+- Uses Vite proxy to call backend APIs
+- Includes candidate dashboard, HR dashboard, and interview page (`#/interview/:resultId?token=...`)
 
-* Extracts resume and job description content
-* Generates intelligent, context-aware questions
-* Covers:
+## Key Features
 
-  * Academic background
-  * Work experience
-  * Projects
-  * System design
-  * Behavioral round
+- Candidate and HR signup/login
+- Candidate can:
+  - Select company/JD
+  - Upload resume for selected JD
+  - View score and explanation
+  - Schedule interview and receive interview link
+- HR can:
+  - Upload multiple JDs
+  - Give custom JD title
+  - Review and update skill weights per selected JD
+  - View shortlisted candidates
+- Interview flow:
+  - Token-protected access
+  - Session-based question progression (intro -> resume -> experience -> project -> system -> HR)
+  - Voice input via browser SpeechRecognition API
+  - Camera/mic preview and permissions
 
----
+## Environment Variables
 
-### 🔁 Anti-Repetition Engine
+Create `.env` in project root:
 
-* Strict duplicate prevention
-* Semantic comparison against previous questions
-* AI instructed to never repeat similar variations
-* Fallback protection logic included
+```env
+DATABASE_URL=sqlite:///./app.db
+SECRET_KEY=replace_with_a_long_random_secret
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=30
 
----
+# Optional but recommended for richer question generation:
+GROQ_API_KEY=
 
-### ⏳ Live Countdown Timer
+# Required for interview email sending:
+EMAIL_ADDRESS=
+EMAIL_PASSWORD=
 
-* Real-time front-end countdown
-* Auto ends interview when time expires
-* Dynamic color transitions (Warning → Danger)
-
----
-
-### 🎤 Voice-Based Interaction
-
-* Speech-to-text for capturing answers
-* Text-to-speech for asking questions
-* Auto-detect silence
-* Auto-move to next question if:
-
-  * Candidate stops speaking
-  * Candidate remains silent
-  * Hard per-question timeout triggers
-
----
-
-### 🧩 Adaptive Interview Flow (State Machine)
-
-The interview follows a structured phase engine:
-
-1. Introduction (fixed first question)
-2. Resume Clarification
-3. Work Experience Deep Dive
-4. Project Deep Dive
-5. System Design
-6. HR / Behavioral
-
-Automatically shifts based on:
-
-* Time remaining
-* Depth covered
-* Silence detection
-
----
-
-### ⚡ Time-Optimized Question Strategy
-
-* If total interview is 2 minutes → rapid-fire questions
-* If longer interview → deeper follow-ups
-* Adjusts difficulty based on:
-
-  * Candidate answer
-  * Remaining time
-  * Current interview phase
-
----
-
-## 🏗 Tech Stack
-
-### Backend
-
-* FastAPI
-* SQLAlchemy
-* Groq LLM (Llama 3.1)
-* Sentence Transformers
-* Session-based state engine
-
-### Frontend
-
-* HTML + Jinja
-* Web Speech API
-* Speech Recognition API
-* Live countdown system
-* Camera + microphone integration
-
----
-
-## 🧠 AI Intelligence Layer
-
-The system uses:
-
-* Context-aware prompt engineering
-* Stage-based questioning strategy
-* Deep drilling follow-up logic
-* Anti-duplicate semantic guardrails
-* Time-sensitive question generation
-
----
-
-## 🔄 Interview Flow Logic
-
-```
-Start Interview
-    ↓
-Intro Question
-    ↓
-Resume-based Questions
-    ↓
-Experience Deep Dive
-    ↓
-Project Architecture Drill
-    ↓
-System Design Challenges
-    ↓
-HR Round
-    ↓
-Auto Interview Completion
+# Optional frontend URL used in interview links sent by email:
+FRONTEND_URL=http://localhost:5173
 ```
 
----
+Notes:
+- For Gmail, `EMAIL_PASSWORD` must be an App Password (not your normal account password).
+- If `GROQ_API_KEY` is missing, interview question generation uses fallback behavior.
 
-## 🛡 Robust Controls
+## Installation
 
-* Auto end on timeout
-* Silence handling
-* Per-question time cap
-* Backend time validation
-* Session reset protection
-* Duplicate prevention layer
+### 1. Backend
 
----
-
-## 📂 Project Structure
-
-```
-AI_Interview_Platform/
-│
-├── routes/
-│   ├── interview.py
-│   ├── candidate.py
-│   └── hr.py
-│
-├── ai_engine/
-│   ├── question_generator.py
-│   └── matching.py
-│
-├── templates/
-│   ├── interview.html
-│   └── base.html
-│
-├── models.py
-├── database.py
-├── main.py
-└── README.md
-```
-
----
-
-## 🧪 Future Improvements (Planned)
-
-* Emotion detection
-* Confidence scoring
-* Resume scoring system
-* AI feedback report generation
-* Performance analytics dashboard
-* Multi-role interview modes
-* Interview recording & playback
-* Admin interview analytics panel
-
----
-
-## 📌 What Makes This Unique?
-
-Unlike basic chatbot interviews:
-
-* Fully timed system
-* Berribot-style structured flow
-* Automatic silence handling
-* Deep project drilling
-* Dynamic question shifting
-* Production-like interviewer behavior
-
----
-
-## 💡 Use Cases
-
-* College placement preparation
-* Technical interview practice
-* Hiring automation
-* Resume-based screening
-* AI-powered mock interviews
-
----
-
-## ⚙ Setup
-
-1. Clone repository
-2. Create `.env` with:
-
-```
-GROQ_API_KEY=your_key_here
-```
-
-3. Install dependencies
-
-```
+```powershell
+cd C:\Users\mohit\Documents\interview_bot_project
+python -m venv venv
+.\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-4. Run
+### 2. Frontend
 
+```powershell
+cd C:\Users\mohit\Documents\interview_bot_project\interview-frontend
+npm install
 ```
-uvicorn main:app --reload
+
+## Run Locally
+
+Open two terminals.
+
+### Terminal A: Backend
+
+```powershell
+cd C:\Users\mohit\Documents\interview_bot_project
+.\venv\Scripts\Activate.ps1
+python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
----
+Health check:
 
-## 🧑‍💻 Author
+```text
+http://127.0.0.1:8000/health
+```
 
-Built as an advanced AI Interview Automation System for scalable hiring simulation and interview preparation.
+### Terminal B: Frontend
+
+```powershell
+cd C:\Users\mohit\Documents\interview_bot_project\interview-frontend
+npm run dev
+```
+
+Frontend URL:
+
+```text
+http://localhost:5173
+```
+
+## API Overview
+
+Main router: `routes/api_routes.py`
+
+Auth:
+- `POST /api/auth/signup`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET /api/auth/me`
+
+Candidate:
+- `GET /api/candidate/dashboard`
+- `POST /api/candidate/upload-resume`
+- `POST /api/candidate/select-interview-date`
+
+HR:
+- `GET /api/hr/dashboard`
+- `GET /api/hr/jobs`
+- `POST /api/hr/upload-jd`
+- `POST /api/hr/confirm-jd`
+- `POST /api/hr/update-skill-weights`
+
+Interview:
+- `GET /api/interview/{result_id}?token=...`
+- `POST /api/interview/next-question`
+
+## Project Structure
+
+```text
+interview_bot_project/
+├── ai_engine/
+│   ├── matching.py
+│   └── question_generator.py
+├── routes/
+│   └── api_routes.py
+├── utils/
+│   └── email_service.py
+├── interview-frontend/
+│   ├── src/
+│   │   ├── App.jsx
+│   │   ├── App.css
+│   │   ├── index.css
+│   │   └── services/api.js
+│   └── vite.config.js
+├── auth.py
+├── database.py
+├── main.py
+├── models.py
+├── requirements.txt
+└── README.md
+```
+
+## Troubleshooting
+
+1. `ECONNREFUSED 127.0.0.1:8000` in Vite logs
+- Backend is not running or crashed.
+- Restart backend and verify `http://127.0.0.1:8000/health`.
+
+2. Voice input button does not work
+- Use Chrome or Edge (best support for SpeechRecognition).
+- Allow microphone permissions for `localhost`.
+- Click `Enable Camera & Mic` before `Start Voice Input`.
+
+3. Interview page shows request failures
+- Ensure backend is running.
+- Open interview link generated from candidate dashboard (valid token).
+
+4. No interview email received
+- Check `EMAIL_ADDRESS` and `EMAIL_PASSWORD` in `.env`.
+- Verify Gmail App Password usage.
+- Check spam/promotions folder.
+
+## Notes
+
+- Backend includes a lightweight schema backfill at startup for `jobs.jd_title` if missing.
+- Session cookies are required for authenticated APIs.
+- Uploaded files are saved under `uploads/`.
