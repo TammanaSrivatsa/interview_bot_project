@@ -1,29 +1,32 @@
-import os
-from dotenv import load_dotenv
-from sqlalchemy import text
+"""FastAPI application entrypoint for Interview Bot backend."""
 
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 from starlette.middleware.sessions import SessionMiddleware
 
 from database import engine
 from models import Base
 from routes.api_routes import api_router
 
-# ---------------------------
-# App Bootstrapping
-# ---------------------------
 load_dotenv()
 
-app = FastAPI(docs_url=None, redoc_url=None)
+app = FastAPI(title="Interview Bot API", version="1.0.0")
 
-# Create tables for current models (dev-friendly startup behavior).
+# Keep startup table creation for local/dev environments.
 Base.metadata.create_all(bind=engine)
 
 
-def ensure_schema():
-    # Lightweight migration for existing SQLite DBs.
+def ensure_schema() -> None:
+    """Backfill lightweight schema changes for existing local SQLite DBs."""
+
     with engine.begin() as conn:
         try:
             rows = conn.execute(text("PRAGMA table_info(jobs)")).fetchall()
@@ -31,31 +34,30 @@ def ensure_schema():
             if "jd_title" not in columns:
                 conn.execute(text("ALTER TABLE jobs ADD COLUMN jd_title VARCHAR(150)"))
         except Exception:
-            # Do not block app startup on non-critical schema backfill.
+            # Non-blocking schema migration best effort.
             pass
 
 
 ensure_schema()
 
-# ---------------------------
-# Middleware + Routing
-# ---------------------------
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.environ["SECRET_KEY"],
+    secret_key=os.getenv("SECRET_KEY", "dev-session-secret-change-me"),
+    same_site="lax",
+    https_only=False,
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+uploads_dir = Path("uploads")
+uploads_dir.mkdir(exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
 app.include_router(api_router)
-
-
-@app.get("/health")
-def health():
-    return {"ok": True}

@@ -16,7 +16,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Fallback DB for local development if env is missing.
 if not DATABASE_URL:
-    DATABASE_URL = "sqlite:///./app.db"
+    DATABASE_URL = "sqlite:///./interview_bot.db"
 
 # Engine handles low-level DB connections.
 engine = create_engine(

@@ -13,3 +13,7 @@ env/
 uploads/
 __pycache__/
 *.pdf
+
+app.db
+interview-frontend/dist/
+tmp_pycache/
