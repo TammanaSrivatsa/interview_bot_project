@@ -1,11 +1,11 @@
-from sqlalchemy import Column, Integer, String, Boolean, Float, JSON, ForeignKey, Text
+from datetime import datetime
+
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import relationship
+
 from database import Base
 
 
-# --------------------------------------------------
-# Candidate Table
-# --------------------------------------------------
 class Candidate(Base):
     __tablename__ = "candidates"
 
@@ -16,14 +16,10 @@ class Candidate(Base):
     gender = Column(String(20))
     resume_path = Column(String(300))
 
-    # Relationships
     results = relationship("Result", back_populates="candidate")
     interviews = relationship("InterviewSession", back_populates="candidate")
 
 
-# --------------------------------------------------
-# HR Table
-# --------------------------------------------------
 class HR(Base):
     __tablename__ = "hr"
 
@@ -35,9 +31,6 @@ class HR(Base):
     jobs = relationship("JobDescription", back_populates="company")
 
 
-# --------------------------------------------------
-# Job Description Table
-# --------------------------------------------------
 class JobDescription(Base):
     __tablename__ = "jobs"
 
@@ -54,9 +47,6 @@ class JobDescription(Base):
     results = relationship("Result", back_populates="job")
 
 
-# --------------------------------------------------
-# Result Table (Matching Output)
-# --------------------------------------------------
 class Result(Base):
     __tablename__ = "results"
 
@@ -67,47 +57,72 @@ class Result(Base):
     score = Column(Float)
     shortlisted = Column(Boolean)
     explanation = Column(JSON)
-
     interview_date = Column(String, nullable=True)
     interview_link = Column(String, nullable=True)
-
-    # 🔥 ADD THIS
     interview_questions = Column(JSON, nullable=True)
     interview_token = Column(String, nullable=True)
 
     candidate = relationship("Candidate", back_populates="results")
     job = relationship("JobDescription", back_populates="results")
+    sessions = relationship("InterviewSession", back_populates="result")
 
 
-# --------------------------------------------------
-# Interview Session Table (NEW)
-# --------------------------------------------------
 class InterviewSession(Base):
-    __tablename__ = "interviews"
+    __tablename__ = "interview_sessions"
 
     id = Column(Integer, primary_key=True, index=True)
-    candidate_id = Column(Integer, ForeignKey("candidates.id"))
-    job_id = Column(Integer, ForeignKey("jobs.id"))
-
-    status = Column(String(50), default="not_started")
-    final_score = Column(Float, nullable=True)
-    overall_feedback = Column(Text, nullable=True)
+    candidate_id = Column(Integer, ForeignKey("candidates.id"), nullable=False, index=True)
+    result_id = Column(Integer, ForeignKey("results.id"), nullable=False, index=True)
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    ended_at = Column(DateTime, nullable=True)
+    status = Column(String(50), default="in_progress", nullable=False)
+    per_question_seconds = Column(Integer, default=60, nullable=False)
 
     candidate = relationship("Candidate", back_populates="interviews")
-    questions = relationship("InterviewQuestion", back_populates="interview")
+    result = relationship("Result", back_populates="sessions")
+    questions = relationship("InterviewQuestion", back_populates="session", cascade="all, delete-orphan")
+    answers = relationship("InterviewAnswer", back_populates="session", cascade="all, delete-orphan")
+    proctor_events = relationship("ProctorEvent", back_populates="session", cascade="all, delete-orphan")
 
 
-# --------------------------------------------------
-# Interview Questions Table (NEW)
-# --------------------------------------------------
 class InterviewQuestion(Base):
-    __tablename__ = "interview_questions"
+    __tablename__ = "interview_questions_v2"
 
     id = Column(Integer, primary_key=True, index=True)
-    interview_id = Column(Integer, ForeignKey("interviews.id"))
+    session_id = Column(Integer, ForeignKey("interview_sessions.id"), nullable=False, index=True)
+    text = Column(Text, nullable=False)
+    difficulty = Column(String(30), default="medium", nullable=False)
+    topic = Column(String(80), default="general", nullable=False)
 
-    question_text = Column(Text)
+    session = relationship("InterviewSession", back_populates="questions")
+    answers = relationship("InterviewAnswer", back_populates="question")
+
+
+class InterviewAnswer(Base):
+    __tablename__ = "interview_answers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("interview_sessions.id"), nullable=False, index=True)
+    question_id = Column(Integer, ForeignKey("interview_questions_v2.id"), nullable=False, index=True)
     answer_text = Column(Text, nullable=True)
-    score = Column(Float, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    ended_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    skipped = Column(Boolean, default=False, nullable=False)
+    time_taken_sec = Column(Integer, default=0, nullable=False)
 
-    interview = relationship("InterviewSession", back_populates="questions")
+    session = relationship("InterviewSession", back_populates="answers")
+    question = relationship("InterviewQuestion", back_populates="answers")
+
+
+class ProctorEvent(Base):
+    __tablename__ = "proctor_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("interview_sessions.id"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    event_type = Column(String(80), nullable=False)
+    score = Column(Float, default=0.0, nullable=False)
+    meta_json = Column(JSON, nullable=True)
+    image_path = Column(String(500), nullable=True)
+
+    session = relationship("InterviewSession", back_populates="proctor_events")

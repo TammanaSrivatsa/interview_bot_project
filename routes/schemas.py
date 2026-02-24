@@ -1,0 +1,37 @@
+"""Pydantic request bodies shared by API route modules."""
+
+from pydantic import BaseModel, EmailStr, Field
+
+
+class LoginBody(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class SignupBody(BaseModel):
+    role: str = Field(..., description="candidate or hr")
+    name: str = Field(..., min_length=2, max_length=150)
+    email: EmailStr
+    password: str = Field(..., min_length=6)
+    gender: str | None = None
+
+
+class SkillWeightsBody(BaseModel):
+    skill_scores: dict[str, int]
+    job_id: int | None = None
+
+
+class ScheduleInterviewBody(BaseModel):
+    result_id: int
+    interview_date: str
+
+
+class InterviewNextQuestionBody(BaseModel):
+    result_id: int
+    token: str
+    last_answer: str = ""
+
+
+class InterviewScoreBody(BaseModel):
+    result_id: int
+    technical_score: float = Field(..., ge=0, le=100)
