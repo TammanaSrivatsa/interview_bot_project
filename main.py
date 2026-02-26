@@ -54,24 +54,58 @@ def ensure_schema() -> None:
             if "answer_text" not in q_cols:
                 conn.execute(text("ALTER TABLE interview_questions_v2 ADD COLUMN answer_text TEXT"))
 
-            # create interview_proctor_events table if missing
-            conn.execute(
+            # Migrate legacy token-flow proctor events into unified proctor_events.
+            legacy_table = conn.execute(
                 text(
                     """
-                    CREATE TABLE IF NOT EXISTS interview_proctor_events (
-                        id INTEGER PRIMARY KEY,
-                        interview_id INTEGER NOT NULL,
-                        question_id INTEGER,
-                        event_type VARCHAR(80) NOT NULL,
-                        confidence FLOAT NOT NULL DEFAULT 0,
-                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        snapshot_path VARCHAR(500),
-                        FOREIGN KEY(interview_id) REFERENCES interview_sessions(id),
-                        FOREIGN KEY(question_id) REFERENCES interview_questions_v2(id)
-                    )
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'interview_proctor_events'
                     """
                 )
-            )
+            ).first()
+            if legacy_table:
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO proctor_events (
+                            session_id,
+                            created_at,
+                            event_type,
+                            score,
+                            meta_json,
+                            image_path
+                        )
+                        SELECT
+                            legacy.interview_id,
+                            legacy.created_at,
+                            legacy.event_type,
+                            legacy.confidence,
+                            '{"migrated_from":"interview_proctor_events"}',
+                            CASE
+                                WHEN legacy.snapshot_path LIKE 'uploads/%'
+                                    THEN substr(legacy.snapshot_path, 9)
+                                ELSE legacy.snapshot_path
+                            END
+                        FROM interview_proctor_events legacy
+                        WHERE NOT EXISTS (
+                            SELECT 1
+                            FROM proctor_events current
+                            WHERE current.session_id = legacy.interview_id
+                                AND current.created_at = legacy.created_at
+                                AND current.event_type = legacy.event_type
+                                AND COALESCE(current.image_path, '') = COALESCE(
+                                    CASE
+                                        WHEN legacy.snapshot_path LIKE 'uploads/%'
+                                            THEN substr(legacy.snapshot_path, 9)
+                                        ELSE legacy.snapshot_path
+                                    END,
+                                    ''
+                                )
+                        )
+                        """
+                    )
+                )
         except Exception:
             # Non-blocking schema migration best effort.
             pass

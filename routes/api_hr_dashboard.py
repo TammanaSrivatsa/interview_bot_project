@@ -8,7 +8,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from database import get_db
-from models import Candidate, InterviewProctorEvent, InterviewQuestion, InterviewSession, JobDescription, Result
+from models import Candidate, InterviewAnswer, InterviewSession, JobDescription, ProctorEvent, Result
 from routes.dependencies import require_role, SessionUser
 
 router = APIRouter(prefix="/hr", tags=["hr"])
@@ -26,11 +26,7 @@ def list_interviews(current_user: SessionUser = Depends(require_role("hr")), db:
         .all()
     )
 
-    counts = (
-        db.query(InterviewProctorEvent.interview_id, func.count(InterviewProctorEvent.id))
-        .group_by(InterviewProctorEvent.interview_id)
-        .all()
-    )
+    counts = db.query(ProctorEvent.session_id, func.count(ProctorEvent.id)).group_by(ProctorEvent.session_id).all()
     count_map = {iid: cnt for iid, cnt in counts}
 
     payload = []
@@ -74,11 +70,20 @@ def interview_detail(
     candidate = db.query(Candidate).filter(Candidate.id == session.candidate_id).first()
     job = db.query(JobDescription).filter(JobDescription.id == result.job_id).first()
     events = (
-        db.query(InterviewProctorEvent)
-        .filter(InterviewProctorEvent.interview_id == session.id)
-        .order_by(InterviewProctorEvent.created_at.asc())
+        db.query(ProctorEvent)
+        .filter(ProctorEvent.session_id == session.id)
+        .order_by(ProctorEvent.created_at.asc())
         .all()
     )
+    latest_answers: dict[int, InterviewAnswer] = {}
+    answer_rows = (
+        db.query(InterviewAnswer)
+        .filter(InterviewAnswer.session_id == session.id)
+        .order_by(InterviewAnswer.question_id.asc(), InterviewAnswer.id.desc())
+        .all()
+    )
+    for row in answer_rows:
+        latest_answers.setdefault(row.question_id, row)
 
     return {
         "ok": True,
@@ -95,11 +100,19 @@ def interview_detail(
             {
                 "id": q.id,
                 "text": q.text,
-                "answer_text": q.answer_text,
+                "answer_text": (
+                    q.answer_text
+                    if q.answer_text is not None
+                    else (latest_answers[q.id].answer_text if q.id in latest_answers else None)
+                ),
                 "answer_summary": q.answer_summary,
                 "relevance_score": q.relevance_score,
-                "time_taken_seconds": q.time_taken_seconds,
-                "skipped": q.skipped,
+                "time_taken_seconds": (
+                    q.time_taken_seconds
+                    if q.time_taken_seconds is not None
+                    else (latest_answers[q.id].time_taken_sec if q.id in latest_answers else None)
+                ),
+                "skipped": q.skipped or (latest_answers[q.id].skipped if q.id in latest_answers else False),
             }
             for q in session.questions
         ],
@@ -107,10 +120,10 @@ def interview_detail(
             {
                 "id": ev.id,
                 "event_type": ev.event_type,
-                "confidence": ev.confidence,
+                "score": float(ev.score),
                 "created_at": ev.created_at,
-                "question_id": ev.question_id,
-                "snapshot_path": ev.snapshot_path,
+                "meta_json": ev.meta_json or {},
+                "image_url": f"/uploads/{ev.image_path}" if ev.image_path else None,
             }
             for ev in events
         ],

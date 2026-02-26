@@ -102,9 +102,9 @@ export default function HRInterviewDetailPage() {
             <div key={ev.id} className="inline-row">
               <span>{ev.created_at}</span>
               <span>{ev.event_type}</span>
-              <span>conf {ev.confidence}</span>
-              {ev.snapshot_path && (
-                <a href={`/` + ev.snapshot_path} target="_blank" rel="noreferrer">
+              <span>score {ev.score ?? 0}</span>
+              {(ev.image_url || ev.snapshot_path) && (
+                <a href={ev.image_url || `/${ev.snapshot_path}`} target="_blank" rel="noreferrer">
                   Snapshot
                 </a>
               )}

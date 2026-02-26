@@ -112,15 +112,6 @@ export const hrApi = {
 };
 
 export const interviewApi = {
-  startByToken(token) {
-    return unwrap(apiClient.get(`/interview/${token}/start`));
-  },
-  answerByToken(token, payload) {
-    return unwrap(apiClient.post(`/interview/${token}/answer`, payload));
-  },
-  eventByToken(token, payload) {
-    return unwrap(apiClient.post(`/interview/${token}/event`, payload));
-  },
   start(payload = {}) {
     return unwrap(apiClient.post("/interview/start", payload));
   },
@@ -136,11 +127,5 @@ export const interviewApi = {
   },
   hrProctoring(sessionId) {
     return unwrap(apiClient.get(`/hr/proctoring/${sessionId}`));
-  },
-  info(resultId, token) {
-    return unwrap(apiClient.get(`/interview/${resultId}`, { params: { token } }));
-  },
-  nextQuestion(payload) {
-    return unwrap(apiClient.post("/interview/next-question", payload));
   },
 };

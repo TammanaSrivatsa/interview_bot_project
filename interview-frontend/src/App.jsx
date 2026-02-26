@@ -7,7 +7,6 @@ import HRDashboardPage from "./pages/HRDashboardPage";
 import HRInterviewListPage from "./pages/HRInterviewListPage";
 import HRInterviewDetailPage from "./pages/HRInterviewDetailPage";
 import Interview from "./pages/Interview";
-import CandidateInterviewPage from "./pages/CandidateInterviewPage";
 import LoginPage from "./pages/LoginPage";
 import PreCheck from "./pages/PreCheck";
 import SignupPage from "./pages/SignupPage";
@@ -67,7 +66,6 @@ export default function App() {
             </PublicOnlyRoute>
           }
         />
-        <Route path="interview/:token" element={<CandidateInterviewPage />} />
         <Route element={<ProtectedRoute role="candidate" />}>
           <Route path="candidate" element={<CandidateDashboardPage />} />
           <Route path="interview/:resultId" element={<PreCheck />} />

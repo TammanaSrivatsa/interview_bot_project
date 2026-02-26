@@ -132,15 +132,3 @@ class ProctorEvent(Base):
     image_path = Column(String(500), nullable=True)
 
     session = relationship("InterviewSession", back_populates="proctor_events")
-
-
-class InterviewProctorEvent(Base):
-    __tablename__ = "interview_proctor_events"
-
-    id = Column(Integer, primary_key=True, index=True)
-    interview_id = Column(Integer, ForeignKey("interview_sessions.id"), nullable=False, index=True)
-    question_id = Column(Integer, ForeignKey("interview_questions_v2.id"), nullable=True, index=True)
-    event_type = Column(String(80), nullable=False)
-    confidence = Column(Float, default=0.0, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
-    snapshot_path = Column(String(500), nullable=True)

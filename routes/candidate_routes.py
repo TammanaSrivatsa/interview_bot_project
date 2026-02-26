@@ -151,10 +151,9 @@ def select_interview_date(
     if not result.shortlisted:
         raise HTTPException(status_code=400, detail="Interview can be scheduled only for shortlisted result")
 
-    meeting_token = str(uuid.uuid4())
-    result.interview_token = meeting_token
+    result.interview_token = None
     result.interview_date = payload.interview_date
-    result.interview_link = f"{frontend_base_url()}/interview/{result.id}?token={meeting_token}"
+    result.interview_link = f"{frontend_base_url()}/interview/{result.id}"
     db.commit()
 
     candidate = get_candidate_or_404(db, current_user.user_id)
