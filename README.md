@@ -4,8 +4,7 @@ An AI-driven interview platform with:
 - FastAPI backend (API-only, session-based auth)
 - React + Vite frontend
 - Resume/JD matching
-- Dynamic interview question flow
-- Camera, microphone, and voice-input support for interview sessions
+- Timed interview sessions with webcam proctoring
 
 ## Current Architecture
 
@@ -19,7 +18,7 @@ This project is now split into:
 2. Frontend (`interview-frontend/`)
 - React app served by Vite
 - Uses Vite proxy to call backend APIs
-- Includes candidate dashboard, HR dashboard, and interview page (`#/interview/:resultId?token=...`)
+- Includes candidate dashboard, HR dashboard, and interview flow (`/interview/:resultId`)
 
 ## Key Features
 
@@ -35,10 +34,10 @@ This project is now split into:
   - Review and update skill weights per selected JD
   - View shortlisted candidates
 - Interview flow:
-  - Token-protected access
-  - Session-based question progression (intro -> resume -> experience -> project -> system -> HR)
-  - Voice input via browser SpeechRecognition API
-  - Camera/mic preview and permissions
+  - Candidate-authenticated pre-check and timed live interview
+  - Per-question timer with auto-skip on timeout
+  - Webcam-based proctoring with baseline and periodic/suspicious captures
+  - HR review of answers and proctoring timeline
 
 ## Environment Variables
 
@@ -50,7 +49,7 @@ SECRET_KEY=replace_with_a_long_random_secret
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 
-# Optional but recommended for richer question generation:
+# Optional model key used by resume/JD scoring:
 GROQ_API_KEY=
 
 # Required for interview email sending:
@@ -63,7 +62,6 @@ FRONTEND_URL=http://localhost:5173
 
 Notes:
 - For Gmail, `EMAIL_PASSWORD` must be an App Password (not your normal account password).
-- If `GROQ_API_KEY` is missing, interview question generation uses fallback behavior.
 
 ## Installation
 
@@ -137,8 +135,10 @@ HR:
 - `POST /api/hr/update-skill-weights`
 
 Interview:
-- `GET /api/interview/{result_id}?token=...`
-- `POST /api/interview/next-question`
+- `POST /api/interview/start`
+- `POST /api/interview/answer`
+- `POST /api/proctor/frame`
+- `GET /api/hr/proctoring/{session_id}`
 
 ## Project Structure
 
@@ -146,7 +146,7 @@ Interview:
 interview_bot_project/
 ├── ai_engine/
 │   ├── matching.py
-│   └── question_generator.py
+│   └── interview_scoring.py
 ├── routes/
 │   └── api_routes.py
 ├── utils/
@@ -172,16 +172,11 @@ interview_bot_project/
 - Backend is not running or crashed.
 - Restart backend and verify `http://127.0.0.1:8000/health`.
 
-2. Voice input button does not work
-- Use Chrome or Edge (best support for SpeechRecognition).
-- Allow microphone permissions for `localhost`.
-- Click `Enable Camera & Mic` before `Start Voice Input`.
-
-3. Interview page shows request failures
+2. Interview page shows request failures
 - Ensure backend is running.
-- Open interview link generated from candidate dashboard (valid token).
+- Login as candidate and open the interview link from dashboard.
 
-4. No interview email received
+3. No interview email received
 - Check `EMAIL_ADDRESS` and `EMAIL_PASSWORD` in `.env`.
 - Verify Gmail App Password usage.
 - Check spam/promotions folder.

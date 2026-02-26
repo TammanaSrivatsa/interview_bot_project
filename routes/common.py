@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os
 from pathlib import Path
-from fastapi import HTTPException, Request
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from ai_engine.interview_scoring import compute_resume_skill_match
 from ai_engine.matching import extract_text_from_file, final_score
@@ -11,32 +11,9 @@ from models import Candidate, HR, JobDescription, Result
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-INTERVIEW_DURATION_MINUTES = 20
-INTERVIEW_SESSION_KEYS = (
-    "interview_start",
-    "interview_result_id",
-    "interview_token",
-    "asked_questions",
-    "question_count",
-)
-FALLBACK_QUESTIONS = (
-    "Walk me through your most relevant project and your specific contribution.",
-    "How would you debug a production issue that only happens intermittently?",
-    "Describe one technical decision you made and the trade-offs you considered.",
-)
-
 
 def frontend_base_url() -> str:
     return os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
-
-
-def clear_interview_session(request: Request) -> None:
-    for key in INTERVIEW_SESSION_KEYS:
-        request.session.pop(key, None)
-
-
-def validate_interview_access(result: Result | None, token: str | None) -> bool:
-    return bool(result and token and result.shortlisted and result.interview_token == token)
 
 
 def get_candidate_or_404(db: Session, candidate_id: int) -> Candidate:
@@ -167,15 +144,3 @@ def upsert_result(
     db.commit()
     db.refresh(result)
     return result
-
-
-def stage_for_question_count(count: int) -> str:
-    if count < 2:
-        return "basics"
-    if count < 5:
-        return "experience"
-    if count < 8:
-        return "advanced_projects"
-    if count < 10:
-        return "deep_dive"
-    return "hr"

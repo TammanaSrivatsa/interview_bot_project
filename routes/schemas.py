@@ -26,12 +26,6 @@ class ScheduleInterviewBody(BaseModel):
     interview_date: str
 
 
-class InterviewNextQuestionBody(BaseModel):
-    result_id: int
-    token: str
-    last_answer: str = ""
-
-
 class InterviewScoreBody(BaseModel):
     result_id: int
     technical_score: float = Field(..., ge=0, le=100)
