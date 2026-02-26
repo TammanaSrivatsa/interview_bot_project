@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { hrApi } from "../services/api";
 
 function normalizeSkillWeights(skillMap) {
@@ -133,7 +134,10 @@ export default function HRDashboardPage() {
       <section className="card">
         <div className="title-row">
           <h2>HR Dashboard</h2>
-          <button onClick={() => loadDashboard(selectedJobId)}>Refresh</button>
+          <div className="inline-row">
+            <Link to="/hr/interviews">Interview Reviews</Link>
+            <button onClick={() => loadDashboard(selectedJobId)}>Refresh</button>
+          </div>
         </div>
         {!!data?.jobs?.length && (
           <div className="stack-sm">
@@ -235,6 +239,11 @@ export default function HRDashboardPage() {
 
       <section className="card">
         <h3>Shortlisted Candidates</h3>
+        <div className="inline-row" style={{ marginBottom: 8 }}>
+          <Link to="/hr/interviews" className="button-link">
+            Open Interview Reviews
+          </Link>
+        </div>
         {!data?.shortlisted_candidates?.length && <p className="muted">No shortlisted candidates yet.</p>}
         {!!data?.shortlisted_candidates?.length && (
           <table className="table">

@@ -39,6 +39,7 @@ export default function HRInterviewListPage() {
               <th>Job</th>
               <th>Status</th>
               <th>Events</th>
+              <th>Suspicious</th>
               <th></th>
             </tr>
           </thead>
@@ -50,6 +51,7 @@ export default function HRInterviewListPage() {
                 <td>{row.job?.title || "Job"}</td>
                 <td>{row.status}</td>
                 <td>{row.events_count}</td>
+                <td>{row.suspicious_events_count ?? 0}</td>
                 <td>
                   <Link to={`/hr/interviews/${row.interview_id}`}>Open</Link>
                 </td>

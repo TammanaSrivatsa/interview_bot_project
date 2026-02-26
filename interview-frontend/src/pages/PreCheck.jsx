@@ -10,10 +10,6 @@ function wait(ms) {
   });
 }
 
-function fileFromBlob(blob, filename) {
-  return new File([blob], filename, { type: "image/jpeg" });
-}
-
 function canvasToBlob(canvas) {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
@@ -26,30 +22,6 @@ function canvasToBlob(canvas) {
   });
 }
 
-async function detectFaces(canvas, detectorRef) {
-  if (detectorRef.current === undefined) {
-    if (typeof window !== "undefined" && "FaceDetector" in window) {
-      detectorRef.current = new window.FaceDetector({
-        fastMode: true,
-        maxDetectedFaces: 5,
-      });
-    } else {
-      detectorRef.current = null;
-    }
-  }
-
-  if (!detectorRef.current) {
-    return 1;
-  }
-
-  try {
-    const faces = await detectorRef.current.detect(canvas);
-    return faces.length;
-  } catch {
-    return 1;
-  }
-}
-
 export default function PreCheck() {
   const { resultId } = useParams();
   const navigate = useNavigate();
@@ -59,7 +31,6 @@ export default function PreCheck() {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const canvasRef = useRef(null);
-  const faceDetectorRef = useRef();
 
   const [cameraReady, setCameraReady] = useState(false);
   const [consentChecked, setConsentChecked] = useState(false);
@@ -111,21 +82,11 @@ export default function PreCheck() {
     }
     ctx.drawImage(video, 0, 0, width, height);
 
-    const facesCount = await detectFaces(canvas, faceDetectorRef);
-    const eventFlags = {
-      no_face: facesCount === 0,
-      multi_face: facesCount > 1,
-    };
-
     const blob = await canvasToBlob(canvas);
     const formData = new FormData();
-    formData.append("file", fileFromBlob(blob, `baseline_${index}.jpg`));
+    formData.append("file", blob, `baseline_${index}.jpg`);
     formData.append("session_id", String(sessionId));
     formData.append("event_type", "baseline");
-    formData.append("event_flags", JSON.stringify(eventFlags));
-    formData.append("motion_score", "0");
-    formData.append("faces_count", String(facesCount));
-
     await interviewApi.uploadProctorFrame(formData);
   }
 
@@ -153,18 +114,14 @@ export default function PreCheck() {
       }
 
       for (let i = 1; i <= BASELINE_SHOTS; i += 1) {
-        setInfo(`Uploading baseline ${i}/${BASELINE_SHOTS}...`);
+        setInfo(`Capturing baseline face ${i}/${BASELINE_SHOTS}...`);
         await uploadBaselineFrame(sessionId, i);
         setBaselineUploaded(i);
-        await wait(350);
+        await wait(300);
       }
 
       navigate(`/interview/${routeResultId}/live`, {
         replace: true,
-        state: {
-          resultId: routeResultId,
-          sessionData: startResponse,
-        },
       });
     } catch (startError) {
       setError(startError.message);
@@ -192,7 +149,7 @@ export default function PreCheck() {
 
       <section className="card stack-sm">
         <p className="muted">
-          Camera access is required for proctoring snapshots during the interview.
+          Camera access is required. Baseline face images will be captured for OpenCV identity checks.
         </p>
         <video ref={videoRef} className="interview-video" autoPlay muted playsInline />
         <canvas ref={canvasRef} className="hidden-canvas" />
