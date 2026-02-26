@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from auth import hash_password, verify_password
+from auth import hash_password, password_needs_upgrade, verify_password
 from database import get_db
 from models import Candidate, HR
 from routes.common import get_candidate_or_404, get_hr_or_404
@@ -64,12 +64,18 @@ def login(
 ) -> dict[str, object]:
     candidate = db.query(Candidate).filter(Candidate.email == payload.email).first()
     if candidate and verify_password(payload.password, candidate.password):
+        if password_needs_upgrade(candidate.password):
+            candidate.password = hash_password(payload.password)
+            db.commit()
         request.session["user_id"] = candidate.id
         request.session["role"] = "candidate"
         return {"ok": True, "role": "candidate", "user_id": candidate.id}
 
     hr_user = db.query(HR).filter(HR.email == payload.email).first()
     if hr_user and verify_password(payload.password, hr_user.password):
+        if password_needs_upgrade(hr_user.password):
+            hr_user.password = hash_password(payload.password)
+            db.commit()
         request.session["user_id"] = hr_user.id
         request.session["role"] = "hr"
         return {"ok": True, "role": "hr", "user_id": hr_user.id}

@@ -1,13 +1,9 @@
 """Shared constants and helper functions used by route modules."""
-
 from __future__ import annotations
-
 import os
 from pathlib import Path
-
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
-
 from ai_engine.interview_scoring import compute_resume_skill_match
 from ai_engine.matching import extract_text_from_file, final_score
 from models import Candidate, HR, JobDescription, Result
@@ -122,7 +118,6 @@ def evaluate_resume_for_job(candidate: Candidate, job: JobDescription) -> tuple[
     except Exception:
         # Fallback keeps API functional even if external model APIs fail.
         pass
-
     explanation["matched_percentage"] = skill_match["matched_percentage"]
     explanation["matched_skills"] = skill_match["matched_skills"]
     explanation["missing_skills"] = skill_match["missing_skills"]
@@ -137,6 +132,8 @@ def upsert_result(
     score: float,
     explanation: dict[str, object],
 ) -> Result:
+    from uuid import uuid4
+
     current = (
         db.query(Result)
         .filter(Result.candidate_id == candidate_id, Result.job_id == job_id)
@@ -148,6 +145,8 @@ def upsert_result(
         current.score = score
         current.shortlisted = shortlisted
         current.explanation = explanation
+        if not current.application_id:
+            current.application_id = f"APP-{job_id}-{candidate_id}-{uuid4().hex[:6].upper()}"
         current.interview_date = None
         current.interview_link = None
         current.interview_token = None
@@ -162,6 +161,7 @@ def upsert_result(
         score=score,
         shortlisted=shortlisted,
         explanation=explanation,
+        application_id=f"APP-{job_id}-{candidate_id}-{uuid4().hex[:6].upper()}",
     )
     db.add(result)
     db.commit()

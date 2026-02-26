@@ -2,9 +2,14 @@ import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { useAuth } from "./context/AuthContext";
 import CandidateDashboardPage from "./pages/CandidateDashboardPage";
+import Completed from "./pages/Completed";
 import HRDashboardPage from "./pages/HRDashboardPage";
-import InterviewPage from "./pages/InterviewPage";
+import HRInterviewListPage from "./pages/HRInterviewListPage";
+import HRInterviewDetailPage from "./pages/HRInterviewDetailPage";
+import Interview from "./pages/Interview";
+import CandidateInterviewPage from "./pages/CandidateInterviewPage";
 import LoginPage from "./pages/LoginPage";
+import PreCheck from "./pages/PreCheck";
 import SignupPage from "./pages/SignupPage";
 import "./App.css";
 
@@ -62,12 +67,17 @@ export default function App() {
             </PublicOnlyRoute>
           }
         />
-        <Route path="interview/:resultId" element={<InterviewPage />} />
+        <Route path="interview/:token" element={<CandidateInterviewPage />} />
         <Route element={<ProtectedRoute role="candidate" />}>
           <Route path="candidate" element={<CandidateDashboardPage />} />
+          <Route path="interview/:resultId" element={<PreCheck />} />
+          <Route path="interview/:resultId/live" element={<Interview />} />
+          <Route path="interview/:resultId/completed" element={<Completed />} />
         </Route>
         <Route element={<ProtectedRoute role="hr" />}>
           <Route path="hr" element={<HRDashboardPage />} />
+          <Route path="hr/interviews" element={<HRInterviewListPage />} />
+          <Route path="hr/interviews/:id" element={<HRInterviewDetailPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

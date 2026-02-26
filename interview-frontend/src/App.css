@@ -170,6 +170,33 @@ button:disabled {
   background: #0f1b2d;
 }
 
+.hidden-canvas {
+  display: none;
+}
+
+.timer-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #d3f9d8;
+  color: #1b4332;
+  border: 1px solid #95d5b2;
+  font-weight: 700;
+}
+
+.timer-chip.warn {
+  background: #fff3bf;
+  color: #7f5539;
+  border-color: #ffd166;
+}
+
+.timer-chip.danger {
+  background: #ffe3e3;
+  color: #9b2226;
+  border-color: #ffb3c1;
+}
+
 @media (max-width: 640px) {
   .app-shell {
     padding: 16px;

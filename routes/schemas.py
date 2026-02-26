@@ -35,3 +35,17 @@ class InterviewNextQuestionBody(BaseModel):
 class InterviewScoreBody(BaseModel):
     result_id: int
     technical_score: float = Field(..., ge=0, le=100)
+
+
+class InterviewStartBody(BaseModel):
+    candidate_id: int | None = None
+    result_id: int | None = None
+    per_question_seconds: int = Field(default=60, ge=15, le=600)
+
+
+class InterviewAnswerBody(BaseModel):
+    session_id: int
+    question_id: int
+    answer_text: str = ""
+    skipped: bool = False
+    time_taken_sec: int = Field(default=0, ge=0, le=600)

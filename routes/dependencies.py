@@ -1,9 +1,6 @@
 """Reusable auth/session dependencies for role-protected API routes."""
-
 from dataclasses import dataclass
-
 from fastapi import Depends, HTTPException, Request
-
 
 @dataclass
 class SessionUser:

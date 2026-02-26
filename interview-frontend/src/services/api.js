@@ -1,7 +1,9 @@
 import axios from "axios";
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
+
 export const apiClient = axios.create({
-  baseURL: "/api",
+  baseURL: API_BASE_URL,
   withCredentials: true,
 });
 
@@ -60,6 +62,15 @@ export const candidateApi = {
 };
 
 export const hrApi = {
+  interviews() {
+    return unwrap(apiClient.get("/hr/interviews"));
+  },
+  interviewDetail(id) {
+    return unwrap(apiClient.get(`/hr/interviews/${id}`));
+  },
+  finalizeInterview(id, payload) {
+    return unwrap(apiClient.post(`/hr/interviews/${id}/finalize`, payload));
+  },
   dashboard(jobId) {
     const params = jobId ? { job_id: jobId } : undefined;
     return unwrap(apiClient.get("/hr/dashboard", { params }));
@@ -101,6 +112,31 @@ export const hrApi = {
 };
 
 export const interviewApi = {
+  startByToken(token) {
+    return unwrap(apiClient.get(`/interview/${token}/start`));
+  },
+  answerByToken(token, payload) {
+    return unwrap(apiClient.post(`/interview/${token}/answer`, payload));
+  },
+  eventByToken(token, payload) {
+    return unwrap(apiClient.post(`/interview/${token}/event`, payload));
+  },
+  start(payload = {}) {
+    return unwrap(apiClient.post("/interview/start", payload));
+  },
+  submitAnswer(payload) {
+    return unwrap(apiClient.post("/interview/answer", payload));
+  },
+  uploadProctorFrame(formData) {
+    return unwrap(
+      apiClient.post("/proctor/frame", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      }),
+    );
+  },
+  hrProctoring(sessionId) {
+    return unwrap(apiClient.get(`/hr/proctoring/${sessionId}`));
+  },
   info(resultId, token) {
     return unwrap(apiClient.get(`/interview/${resultId}`, { params: { token } }));
   },
