@@ -78,6 +78,11 @@ class InterviewSession(Base):
     ended_at = Column(DateTime, nullable=True)
     status = Column(String(50), default="in_progress", nullable=False)
     per_question_seconds = Column(Integer, default=60, nullable=False)
+    total_time_seconds = Column(Integer, default=1200, nullable=False)
+    remaining_time_seconds = Column(Integer, default=1200, nullable=False)
+    max_questions = Column(Integer, default=8, nullable=False)
+    baseline_face_signature = Column(Text, nullable=True)
+    baseline_face_captured_at = Column(DateTime, nullable=True)
 
     candidate = relationship("Candidate", back_populates="interviews")
     result = relationship("Result", back_populates="sessions")
@@ -97,6 +102,7 @@ class InterviewQuestion(Base):
     answer_text = Column(Text, nullable=True)
     answer_summary = Column(Text, nullable=True)
     relevance_score = Column(Float, nullable=True)
+    allotted_seconds = Column(Integer, default=60, nullable=False)
     time_taken_seconds = Column(Integer, nullable=True)
     skipped = Column(Boolean, default=False, nullable=False)
 

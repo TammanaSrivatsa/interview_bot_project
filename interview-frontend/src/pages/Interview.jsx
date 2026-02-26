@@ -3,26 +3,6 @@ import { useNavigate, useParams } from "react-router-dom";
 import { interviewApi } from "../services/api";
 
 const SNAPSHOT_INTERVAL_MS = 2000;
-const PERIODIC_UPLOAD_MS = 10000;
-const MOTION_THRESHOLD = 0.18;
-
-function computeMotionScore(previousFrame, currentFrame) {
-  if (!previousFrame || !currentFrame) return 0;
-  const prev = previousFrame.data;
-  const curr = currentFrame.data;
-  const stride = 16;
-  let diffTotal = 0;
-  let maxTotal = 0;
-
-  for (let i = 0; i < prev.length; i += stride) {
-    diffTotal += Math.abs(prev[i] - curr[i]);
-    diffTotal += Math.abs(prev[i + 1] - curr[i + 1]);
-    diffTotal += Math.abs(prev[i + 2] - curr[i + 2]);
-    maxTotal += 255 * 3;
-  }
-  if (!maxTotal) return 0;
-  return diffTotal / maxTotal;
-}
 
 function canvasToBlob(canvas) {
   return new Promise((resolve, reject) => {
@@ -32,32 +12,8 @@ function canvasToBlob(canvas) {
         return;
       }
       resolve(blob);
-    }, "image/jpeg", 0.75);
+    }, "image/jpeg", 0.78);
   });
-}
-
-async function detectFaces(canvas, detectorRef) {
-  if (detectorRef.current === undefined) {
-    if (typeof window !== "undefined" && "FaceDetector" in window) {
-      detectorRef.current = new window.FaceDetector({
-        fastMode: true,
-        maxDetectedFaces: 5,
-      });
-    } else {
-      detectorRef.current = null;
-    }
-  }
-
-  if (!detectorRef.current) {
-    return 1;
-  }
-
-  try {
-    const faces = await detectorRef.current.detect(canvas);
-    return faces.length;
-  } catch {
-    return 1;
-  }
 }
 
 export default function Interview() {
@@ -69,9 +25,6 @@ export default function Interview() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
-  const faceDetectorRef = useRef();
-  const lastFrameRef = useRef(null);
-  const lastUploadAtRef = useRef(0);
   const captureBusyRef = useRef(false);
   const autoSkipLockRef = useRef(false);
 
@@ -79,19 +32,20 @@ export default function Interview() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [sessionData, setSessionData] = useState(null);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [answerText, setAnswerText] = useState("");
-  const [remainingSeconds, setRemainingSeconds] = useState(0);
-  const [motionScore, setMotionScore] = useState(0);
-  const [facesCount, setFacesCount] = useState(1);
 
-  const questions = sessionData?.questions || [];
-  const sessionId = sessionData?.session_id || null;
-  const perQuestionSeconds = sessionData?.per_question_seconds || 60;
-  const currentQuestion = questions[currentIndex] || null;
-  const totalQuestions = questions.length;
-  const hasActiveQuestion = Boolean(currentQuestion && sessionId);
+  const [sessionId, setSessionId] = useState(null);
+  const [currentQuestion, setCurrentQuestion] = useState(null);
+  const [questionNumber, setQuestionNumber] = useState(0);
+  const [maxQuestions, setMaxQuestions] = useState(0);
+  const [questionTimeLimit, setQuestionTimeLimit] = useState(0);
+  const [remainingSeconds, setRemainingSeconds] = useState(0);
+  const [remainingTotalSeconds, setRemainingTotalSeconds] = useState(0);
+  const [answerText, setAnswerText] = useState("");
+  const [lastEventType, setLastEventType] = useState("none");
+  const [lastFacesCount, setLastFacesCount] = useState(0);
+  const [lastMotionScore, setLastMotionScore] = useState(0);
+
+  const hasActiveQuestion = Boolean(sessionId && currentQuestion);
 
   const timerClassName = useMemo(() => {
     if (remainingSeconds <= 5) return "timer-chip danger";
@@ -127,39 +81,31 @@ export default function Interview() {
     try {
       const body = {};
       if (routeResultId > 0) body.result_id = routeResultId;
-      const startPayload = await interviewApi.start(body);
-      if (!startPayload?.session_id || !Array.isArray(startPayload?.questions)) {
-        throw new Error("Interview session payload is invalid.");
+      const payload = await interviewApi.start(body);
+      if (!payload?.session_id) {
+        throw new Error("Could not initialize interview session.");
       }
-      setSessionData(startPayload);
-      setCurrentIndex(0);
-      setRemainingSeconds(startPayload.per_question_seconds || 60);
-      setNotice("Interview started. Timer runs per question.");
+      setSessionId(payload.session_id);
+      setCurrentQuestion(payload.current_question || null);
+      setQuestionNumber(payload.question_number || 0);
+      setMaxQuestions(payload.max_questions || 0);
+      setQuestionTimeLimit(payload.time_limit_seconds || 0);
+      setRemainingSeconds(payload.time_limit_seconds || 0);
+      setRemainingTotalSeconds(payload.remaining_total_seconds || 0);
+
+      if (!payload.current_question || payload.interview_completed) {
+        navigate(`/interview/${routeResultId}/completed?sessionId=${payload.session_id}`, { replace: true });
+        return;
+      }
+      setNotice("Interview started. Questions are generated progressively.");
     } catch (initError) {
       setError(initError.message);
     } finally {
       setLoading(false);
     }
-  }, [routeResultId]);
+  }, [navigate, routeResultId]);
 
-  const uploadSnapshot = useCallback(
-    async (canvas, flags, motion, faces, eventType) => {
-      if (!sessionId) return;
-      const blob = await canvasToBlob(canvas);
-      const formData = new FormData();
-      formData.append("file", blob, `frame_${Date.now()}.jpg`);
-      formData.append("session_id", String(sessionId));
-      formData.append("event_flags", JSON.stringify(flags));
-      formData.append("motion_score", String(motion));
-      formData.append("faces_count", String(faces));
-      formData.append("event_type", eventType);
-      await interviewApi.uploadProctorFrame(formData);
-      lastUploadAtRef.current = Date.now();
-    },
-    [sessionId],
-  );
-
-  const proctorTick = useCallback(async () => {
+  const uploadSnapshot = useCallback(async () => {
     if (!sessionId || !hasActiveQuestion) return;
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -169,34 +115,24 @@ export default function Interview() {
     const height = video.videoHeight || 360;
     canvas.width = width;
     canvas.height = height;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
     ctx.drawImage(video, 0, 0, width, height);
-    const currentFrame = ctx.getImageData(0, 0, width, height);
-    const motion = computeMotionScore(lastFrameRef.current, currentFrame);
-    lastFrameRef.current = currentFrame;
+    const blob = await canvasToBlob(canvas);
+    const formData = new FormData();
+    formData.append("file", blob, `scan_${Date.now()}.jpg`);
+    formData.append("session_id", String(sessionId));
+    formData.append("event_type", "scan");
 
-    const faces = await detectFaces(canvas, faceDetectorRef);
-    const flags = {
-      no_face: faces === 0,
-      multi_face: faces > 1,
-      high_motion: motion > MOTION_THRESHOLD,
-    };
-    const suspicious = flags.no_face || flags.multi_face || flags.high_motion;
-    const periodic = Date.now() - lastUploadAtRef.current >= PERIODIC_UPLOAD_MS;
-
-    setMotionScore(motion);
-    setFacesCount(faces);
-
-    if (!suspicious && !periodic) return;
-    const eventType = suspicious ? "suspicious" : "periodic";
-    try {
-      await uploadSnapshot(canvas, flags, motion, faces, eventType);
-    } catch {
-      setNotice("Proctor frame upload failed; retrying automatically.");
+    const response = await interviewApi.uploadProctorFrame(formData);
+    setLastEventType(response?.event_type || "none");
+    setLastFacesCount(Number(response?.faces_count ?? 0));
+    setLastMotionScore(Number(response?.motion_score ?? 0));
+    if (response?.suspicious) {
+      setNotice(`Suspicious event captured: ${response.event_type}`);
     }
-  }, [hasActiveQuestion, sessionId, uploadSnapshot]);
+  }, [hasActiveQuestion, sessionId]);
 
   const submitAnswer = useCallback(
     async (skipped = false) => {
@@ -205,10 +141,11 @@ export default function Interview() {
       setSubmitting(true);
       setError("");
       try {
-        const elapsed = Math.max(0, perQuestionSeconds - remainingSeconds);
+        const elapsed = Math.max(0, questionTimeLimit - remainingSeconds);
         const timeTaken = skipped
-          ? perQuestionSeconds
-          : Math.max(1, Math.min(perQuestionSeconds, elapsed));
+          ? questionTimeLimit
+          : Math.max(1, Math.min(questionTimeLimit, elapsed));
+
         const response = await interviewApi.submitAnswer({
           session_id: sessionId,
           question_id: currentQuestion.id,
@@ -217,22 +154,20 @@ export default function Interview() {
           time_taken_sec: timeTaken,
         });
 
-        const nextIndex = response?.next_question_index;
-        if (
-          response?.interview_completed ||
-          nextIndex === null ||
-          nextIndex === undefined ||
-          nextIndex >= totalQuestions
-        ) {
+        if (response?.interview_completed || !response?.next_question) {
           navigate(`/interview/${routeResultId}/completed?sessionId=${sessionId}`, {
             replace: true,
           });
           return;
         }
 
-        setCurrentIndex(nextIndex);
+        setCurrentQuestion(response.next_question);
+        setQuestionNumber(response.question_number || questionNumber + 1);
+        setMaxQuestions(response.max_questions || maxQuestions);
+        setQuestionTimeLimit(response.time_limit_seconds || questionTimeLimit);
+        setRemainingSeconds(response.time_limit_seconds || questionTimeLimit);
+        setRemainingTotalSeconds(response.remaining_total_seconds || remainingTotalSeconds);
         setAnswerText("");
-        setRemainingSeconds(perQuestionSeconds);
         autoSkipLockRef.current = false;
       } catch (submitError) {
         setError(submitError.message);
@@ -243,13 +178,15 @@ export default function Interview() {
     [
       answerText,
       currentQuestion,
+      maxQuestions,
       navigate,
-      perQuestionSeconds,
+      questionNumber,
+      questionTimeLimit,
       remainingSeconds,
+      remainingTotalSeconds,
       routeResultId,
       sessionId,
       submitting,
-      totalQuestions,
     ],
   );
 
@@ -262,14 +199,8 @@ export default function Interview() {
   }, [bootstrapSession]);
 
   useEffect(() => {
-    if (!sessionId || !hasActiveQuestion) return;
-    setRemainingSeconds(perQuestionSeconds);
-    autoSkipLockRef.current = false;
-  }, [sessionId, hasActiveQuestion, currentIndex, perQuestionSeconds]);
-
-  useEffect(() => {
-    if (!sessionId || !hasActiveQuestion || submitting) return undefined;
-    if (remainingSeconds <= 0) {
+    if (!hasActiveQuestion || submitting) return undefined;
+    if (remainingSeconds <= 0 || remainingTotalSeconds <= 0) {
       if (!autoSkipLockRef.current) {
         autoSkipLockRef.current = true;
         void submitAnswer(true);
@@ -278,25 +209,26 @@ export default function Interview() {
     }
     const timeoutId = setTimeout(() => {
       setRemainingSeconds((value) => Math.max(0, value - 1));
+      setRemainingTotalSeconds((value) => Math.max(0, value - 1));
     }, 1000);
     return () => {
       clearTimeout(timeoutId);
     };
-  }, [hasActiveQuestion, remainingSeconds, sessionId, submitAnswer, submitting]);
+  }, [hasActiveQuestion, remainingSeconds, remainingTotalSeconds, submitAnswer, submitting]);
 
   useEffect(() => {
-    if (!sessionId || !hasActiveQuestion) return undefined;
+    if (!hasActiveQuestion) return undefined;
     const intervalId = setInterval(() => {
       if (captureBusyRef.current) return;
       captureBusyRef.current = true;
-      void proctorTick().finally(() => {
+      void uploadSnapshot().finally(() => {
         captureBusyRef.current = false;
       });
     }, SNAPSHOT_INTERVAL_MS);
     return () => {
       clearInterval(intervalId);
     };
-  }, [hasActiveQuestion, proctorTick, sessionId]);
+  }, [hasActiveQuestion, uploadSnapshot]);
 
   if (loading) {
     return <p className="center muted">Loading interview session...</p>;
@@ -306,7 +238,7 @@ export default function Interview() {
     <div className="stack">
       <header className="title-row">
         <h2>Timed Interview</h2>
-        <span className={timerClassName}>Time Left: {remainingSeconds}s</span>
+        <span className={timerClassName}>Q Timer: {remainingSeconds}s</span>
       </header>
 
       {error && <p className="alert error">{error}</p>}
@@ -314,7 +246,7 @@ export default function Interview() {
 
       <section className="card stack-sm">
         <p>
-          Question {Math.min(currentIndex + 1, totalQuestions)} / {totalQuestions}
+          Question {questionNumber} / {maxQuestions} | Total Time Left: {remainingTotalSeconds}s
         </p>
         <div className="question-box">
           {currentQuestion?.text || "No active question. Complete this interview session."}
@@ -337,12 +269,11 @@ export default function Interview() {
       </section>
 
       <section className="card stack-sm">
-        <h3>Proctoring Feed</h3>
+        <h3>Proctoring Feed (OpenCV Backend)</h3>
         <video ref={videoRef} className="interview-video" autoPlay muted playsInline />
         <canvas ref={canvasRef} className="hidden-canvas" />
         <p className="muted">
-          Faces: {facesCount} | Motion Score: {motionScore.toFixed(3)} | Capture every{" "}
-          {SNAPSHOT_INTERVAL_MS / 1000}s
+          Last Event: {lastEventType} | Faces: {lastFacesCount} | Motion: {lastMotionScore.toFixed(3)}
         </p>
       </section>
     </div>

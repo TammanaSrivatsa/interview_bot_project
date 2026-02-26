@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from sqlalchemy import func
+from pydantic import BaseModel, Field
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session, joinedload
 
 from database import get_db
@@ -26,8 +26,27 @@ def list_interviews(current_user: SessionUser = Depends(require_role("hr")), db:
         .all()
     )
 
-    counts = db.query(ProctorEvent.session_id, func.count(ProctorEvent.id)).group_by(ProctorEvent.session_id).all()
-    count_map = {iid: cnt for iid, cnt in counts}
+    counts = (
+        db.query(
+            ProctorEvent.session_id,
+            func.count(ProctorEvent.id).label("events_count"),
+            func.sum(
+                case(
+                    (ProctorEvent.event_type.in_(("periodic", "baseline")), 0),
+                    else_=1,
+                )
+            ).label("suspicious_count"),
+        )
+        .group_by(ProctorEvent.session_id)
+        .all()
+    )
+    count_map = {
+        row.session_id: {
+            "events_count": int(row.events_count or 0),
+            "suspicious_count": int(row.suspicious_count or 0),
+        }
+        for row in counts
+    }
 
     payload = []
     for session in sessions:
@@ -43,7 +62,8 @@ def list_interviews(current_user: SessionUser = Depends(require_role("hr")), db:
                 "status": session.status,
                 "started_at": session.started_at,
                 "ended_at": session.ended_at,
-                "events_count": count_map.get(session.id, 0),
+                "events_count": count_map.get(session.id, {}).get("events_count", 0),
+                "suspicious_events_count": count_map.get(session.id, {}).get("suspicious_count", 0),
             }
         )
     return {"ok": True, "interviews": payload}
@@ -85,6 +105,15 @@ def interview_detail(
     for row in answer_rows:
         latest_answers.setdefault(row.question_id, row)
 
+    explanation = result.explanation or {}
+    hr_review = {
+        "final_score": explanation.get("hr_final_score"),
+        "behavioral_score": explanation.get("hr_behavioral_score"),
+        "communication_score": explanation.get("hr_communication_score"),
+        "red_flags": explanation.get("hr_red_flags"),
+        "notes": explanation.get("hr_final_notes"),
+    }
+
     return {
         "ok": True,
         "interview": {
@@ -107,6 +136,7 @@ def interview_detail(
                 ),
                 "answer_summary": q.answer_summary,
                 "relevance_score": q.relevance_score,
+                "allotted_seconds": q.allotted_seconds,
                 "time_taken_seconds": (
                     q.time_taken_seconds
                     if q.time_taken_seconds is not None
@@ -114,7 +144,7 @@ def interview_detail(
                 ),
                 "skipped": q.skipped or (latest_answers[q.id].skipped if q.id in latest_answers else False),
             }
-            for q in session.questions
+            for q in sorted(session.questions, key=lambda item: item.id)
         ],
         "events": [
             {
@@ -124,16 +154,21 @@ def interview_detail(
                 "created_at": ev.created_at,
                 "meta_json": ev.meta_json or {},
                 "image_url": f"/uploads/{ev.image_path}" if ev.image_path else None,
+                "suspicious": ev.event_type not in {"periodic", "baseline"},
             }
             for ev in events
         ],
+        "hr_review": hr_review,
     }
 
 
 class FinalizeBody(BaseModel):
     decision: str
     notes: str | None = None
-    final_score: float | None = None
+    final_score: float | None = Field(default=None, ge=0, le=100)
+    behavioral_score: float | None = Field(default=None, ge=0, le=100)
+    communication_score: float | None = Field(default=None, ge=0, le=100)
+    red_flags: str | None = None
 
 
 @router.post("/interviews/{interview_id}/finalize")
@@ -159,8 +194,21 @@ def finalize_interview(
     explanation = result.explanation or {}
     explanation["hr_final_notes"] = payload.notes
     explanation["hr_final_score"] = payload.final_score
+    explanation["hr_behavioral_score"] = payload.behavioral_score
+    explanation["hr_communication_score"] = payload.communication_score
+    explanation["hr_red_flags"] = payload.red_flags
     result.explanation = explanation
     if payload.final_score is not None:
         result.score = payload.final_score
     db.commit()
-    return {"ok": True, "status": session.status}
+    return {
+        "ok": True,
+        "status": session.status,
+        "hr_review": {
+            "final_score": payload.final_score,
+            "behavioral_score": payload.behavioral_score,
+            "communication_score": payload.communication_score,
+            "red_flags": payload.red_flags,
+            "notes": payload.notes,
+        },
+    }

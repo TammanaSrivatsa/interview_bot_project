@@ -53,6 +53,32 @@ def ensure_schema() -> None:
                 conn.execute(text("ALTER TABLE interview_questions_v2 ADD COLUMN skipped BOOLEAN DEFAULT 0 NOT NULL"))
             if "answer_text" not in q_cols:
                 conn.execute(text("ALTER TABLE interview_questions_v2 ADD COLUMN answer_text TEXT"))
+            if "allotted_seconds" not in q_cols:
+                conn.execute(
+                    text("ALTER TABLE interview_questions_v2 ADD COLUMN allotted_seconds INTEGER DEFAULT 60 NOT NULL")
+                )
+
+            # new columns on interview_sessions
+            rows = conn.execute(text("PRAGMA table_info(interview_sessions)")).fetchall()
+            session_cols = {row[1] for row in rows}
+            if "total_time_seconds" not in session_cols:
+                conn.execute(
+                    text("ALTER TABLE interview_sessions ADD COLUMN total_time_seconds INTEGER DEFAULT 1200 NOT NULL")
+                )
+            if "remaining_time_seconds" not in session_cols:
+                conn.execute(
+                    text(
+                        "ALTER TABLE interview_sessions ADD COLUMN remaining_time_seconds INTEGER DEFAULT 1200 NOT NULL"
+                    )
+                )
+            if "max_questions" not in session_cols:
+                conn.execute(
+                    text("ALTER TABLE interview_sessions ADD COLUMN max_questions INTEGER DEFAULT 8 NOT NULL")
+                )
+            if "baseline_face_signature" not in session_cols:
+                conn.execute(text("ALTER TABLE interview_sessions ADD COLUMN baseline_face_signature TEXT"))
+            if "baseline_face_captured_at" not in session_cols:
+                conn.execute(text("ALTER TABLE interview_sessions ADD COLUMN baseline_face_captured_at DATETIME"))
 
             # Migrate legacy token-flow proctor events into unified proctor_events.
             legacy_table = conn.execute(

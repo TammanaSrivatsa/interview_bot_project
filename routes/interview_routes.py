@@ -1,15 +1,19 @@
-"""Interview + timed session + proctoring routes."""
+"""Interview + timed session + OpenCV proctoring routes."""
 
 from __future__ import annotations
 
 import json
-import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
+from ai_engine.interview_question_flow import (
+    compute_dynamic_seconds,
+    next_question_payload,
+    normalize_result_questions,
+)
 from database import get_db
 from models import (
     Candidate,
@@ -22,60 +26,39 @@ from models import (
 )
 from routes.dependencies import SessionUser, require_role
 from routes.schemas import InterviewAnswerBody, InterviewStartBody
+from utils.proctoring_cv import analyze_frame, compare_signatures, should_store_periodic
+from utils.scoring import summarize_and_score
 
 router = APIRouter()
 
 PROCTOR_UPLOAD_ROOT = Path("uploads") / "proctoring"
 PROCTOR_UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
-FALLBACK_SESSION_QUESTIONS = (
-    "Introduce yourself and summarize your recent technical work.",
-    "Describe a production issue you debugged and how you resolved it.",
-    "How would you design a scalable API endpoint with pagination and caching?",
-    "Tell me about a trade-off you made between delivery speed and code quality.",
-    "What areas do you want to improve in over the next 6 months?",
-)
+HIGH_MOTION_THRESHOLD = 0.20
+FACE_MISMATCH_THRESHOLD = 0.78
+PERIODIC_SAVE_SECONDS = 10
+SUSPICIOUS_TYPES = {"no_face", "multi_face", "face_mismatch", "high_motion", "baseline_no_face", "baseline_multi_face"}
 
 
-def _extract_questions_from_result(result: Result | None) -> list[dict[str, str]]:
-    payload = result.interview_questions if result else None
-    normalized: list[dict[str, str]] = []
-
-    candidates: list[object] = []
-    if isinstance(payload, list):
-        candidates = payload
-    elif isinstance(payload, dict):
-        questions = payload.get("questions")
-        if isinstance(questions, list):
-            candidates = questions
-
-    for item in candidates:
-        if isinstance(item, str):
-            text = item.strip()
-            if text:
-                normalized.append({"text": text, "difficulty": "medium", "topic": "general"})
-            continue
-        if not isinstance(item, dict):
-            continue
-        text = str(item.get("text") or item.get("question") or "").strip()
-        if not text:
-            continue
-        normalized.append(
-            {
-                "text": text,
-                "difficulty": str(item.get("difficulty") or "medium"),
-                "topic": str(item.get("topic") or "general"),
-            }
-        )
-
-    if normalized:
-        return normalized
-    return [{"text": text, "difficulty": "medium", "topic": "general"} for text in FALLBACK_SESSION_QUESTIONS]
+def _ordered_questions(db: Session, session_id: int) -> list[InterviewQuestion]:
+    return (
+        db.query(InterviewQuestion)
+        .filter(InterviewQuestion.session_id == session_id)
+        .order_by(InterviewQuestion.id.asc())
+        .all()
+    )
 
 
-def _serialize_session_questions(session: InterviewSession) -> list[dict[str, object]]:
-    questions = sorted(session.questions, key=lambda q: q.id)
-    return [{"id": question.id, "text": question.text} for question in questions]
+def _serialize_question(question: InterviewQuestion | None) -> dict[str, object] | None:
+    if not question:
+        return None
+    return {
+        "id": question.id,
+        "text": question.text,
+        "difficulty": question.difficulty,
+        "topic": question.topic,
+        "allotted_seconds": int(question.allotted_seconds or 0),
+    }
 
 
 def _get_candidate_session_or_403(
@@ -117,6 +100,66 @@ def _resolve_candidate_result(db: Session, candidate_id: int, result_id: int | N
     return result
 
 
+def _create_next_question(
+    db: Session,
+    session: InterviewSession,
+    result: Result,
+    last_answer: str,
+) -> InterviewQuestion | None:
+    existing = _ordered_questions(db, session.id)
+    max_questions = int(session.max_questions or 8)
+    if len(existing) >= max_questions:
+        return None
+    remaining_total = int(session.remaining_time_seconds or session.total_time_seconds or 1200)
+    if remaining_total <= 0:
+        return None
+
+    asked_questions = [item.text for item in existing]
+    source_questions = normalize_result_questions(result.interview_questions)
+    job = db.query(JobDescription).filter(JobDescription.id == result.job_id).first()
+    job_title = (job.jd_title if job else "") or "the role"
+    generated = next_question_payload(
+        source_questions=source_questions,
+        asked_questions=asked_questions,
+        question_index=len(existing),
+        last_answer=last_answer,
+        jd_title=job_title,
+    )
+    dynamic_seconds = compute_dynamic_seconds(
+        base_seconds=int(session.per_question_seconds or 60),
+        question_index=len(existing),
+        last_answer=last_answer,
+    )
+
+    question = InterviewQuestion(
+        session_id=session.id,
+        text=generated["text"],
+        difficulty=generated["difficulty"],
+        topic=generated["topic"],
+        allotted_seconds=dynamic_seconds,
+    )
+    db.add(question)
+    db.flush()
+    return question
+
+
+def _compose_start_response(
+    session: InterviewSession,
+    question: InterviewQuestion | None,
+    answered_count: int,
+) -> dict[str, object]:
+    return {
+        "ok": True,
+        "session_id": session.id,
+        "interview_completed": question is None,
+        "current_question": _serialize_question(question),
+        "question_number": answered_count + (1 if question else 0),
+        "max_questions": int(session.max_questions or 8),
+        "time_limit_seconds": int((question.allotted_seconds if question else 0) or 0),
+        "remaining_total_seconds": int(session.remaining_time_seconds or session.total_time_seconds or 1200),
+    }
+
+
 @router.post("/interview/start")
 def interview_start(
     payload: InterviewStartBody,
@@ -132,7 +175,7 @@ def interview_start(
 
     result = _resolve_candidate_result(db, candidate.id, payload.result_id)
 
-    existing_session = (
+    session = (
         db.query(InterviewSession)
         .filter(
             InterviewSession.candidate_id == candidate.id,
@@ -142,42 +185,36 @@ def interview_start(
         .order_by(InterviewSession.id.desc())
         .first()
     )
-    if existing_session and existing_session.questions:
-        return {
-            "ok": True,
-            "session_id": existing_session.id,
-            "questions": _serialize_session_questions(existing_session),
-            "per_question_seconds": existing_session.per_question_seconds,
-        }
-
-    session = InterviewSession(
-        candidate_id=candidate.id,
-        result_id=result.id,
-        status="in_progress",
-        per_question_seconds=payload.per_question_seconds,
-    )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-
-    for item in _extract_questions_from_result(result):
-        db.add(
-            InterviewQuestion(
-                session_id=session.id,
-                text=item["text"],
-                difficulty=item["difficulty"],
-                topic=item["topic"],
-            )
+    if not session:
+        session = InterviewSession(
+            candidate_id=candidate.id,
+            result_id=result.id,
+            status="in_progress",
+            per_question_seconds=payload.per_question_seconds,
+            total_time_seconds=payload.total_time_seconds,
+            remaining_time_seconds=payload.total_time_seconds,
+            max_questions=payload.max_questions,
         )
-    db.commit()
-    db.refresh(session)
+        db.add(session)
+        db.commit()
+        db.refresh(session)
 
-    return {
-        "ok": True,
-        "session_id": session.id,
-        "questions": _serialize_session_questions(session),
-        "per_question_seconds": session.per_question_seconds,
-    }
+    ordered = _ordered_questions(db, session.id)
+    answered_count = sum(1 for item in ordered if item.time_taken_seconds is not None)
+    current_question = next((item for item in ordered if item.time_taken_seconds is None), None)
+
+    if not current_question:
+        current_question = _create_next_question(db, session, result, last_answer="")
+        if current_question:
+            db.commit()
+            db.refresh(current_question)
+
+    if not current_question:
+        session.status = "completed"
+        session.ended_at = session.ended_at or datetime.utcnow()
+        db.commit()
+
+    return _compose_start_response(session, current_question, answered_count)
 
 
 @router.post("/interview/answer")
@@ -200,10 +237,19 @@ def interview_answer(
     )
     if not question:
         raise HTTPException(status_code=404, detail="Question not found in session")
+    if question.time_taken_seconds is not None:
+        raise HTTPException(status_code=400, detail="Question already answered")
 
     now = datetime.utcnow()
-    safe_time_taken = int(max(0, payload.time_taken_sec))
+    question_limit = int(question.allotted_seconds or session.per_question_seconds or 60)
+    safe_time_taken = int(max(0, min(payload.time_taken_sec, question_limit)))
     started_at = now - timedelta(seconds=safe_time_taken) if safe_time_taken else now
+
+    answer_text = (payload.answer_text or "").strip()
+    if payload.skipped:
+        answer_text = ""
+
+    summary, relevance_score = summarize_and_score(question.text, answer_text)
 
     answer = (
         db.query(InterviewAnswer)
@@ -215,7 +261,7 @@ def interview_answer(
         .first()
     )
     if answer:
-        answer.answer_text = payload.answer_text
+        answer.answer_text = answer_text if not payload.skipped else None
         answer.skipped = payload.skipped
         answer.time_taken_sec = safe_time_taken
         answer.started_at = started_at
@@ -224,7 +270,7 @@ def interview_answer(
         answer = InterviewAnswer(
             session_id=session.id,
             question_id=question.id,
-            answer_text=payload.answer_text,
+            answer_text=answer_text if not payload.skipped else None,
             skipped=payload.skipped,
             time_taken_sec=safe_time_taken,
             started_at=started_at,
@@ -232,30 +278,54 @@ def interview_answer(
         )
         db.add(answer)
 
-    question.answer_text = payload.answer_text if not payload.skipped else None
+    question.answer_text = answer_text if not payload.skipped else None
+    question.answer_summary = summary
+    question.relevance_score = relevance_score
     question.skipped = payload.skipped
     question.time_taken_seconds = safe_time_taken
-    db.commit()
 
-    question_ids = [
-        row[0]
-        for row in db.query(InterviewQuestion.id)
-        .filter(InterviewQuestion.session_id == session.id)
-        .order_by(InterviewQuestion.id.asc())
-        .all()
-    ]
-    current_index = question_ids.index(question.id)
-    next_index = current_index + 1
-    interview_completed = next_index >= len(question_ids)
+    current_remaining = int(session.remaining_time_seconds or session.total_time_seconds or 1200)
+    session.remaining_time_seconds = max(0, current_remaining - safe_time_taken)
+
+    ordered = _ordered_questions(db, session.id)
+    answered_count = sum(1 for item in ordered if item.time_taken_seconds is not None)
+    result = db.query(Result).filter(Result.id == session.result_id).first()
+    if not result:
+        raise HTTPException(status_code=404, detail="Interview result not found")
+
+    interview_completed = False
+    next_question = None
+    max_questions = int(session.max_questions or 8)
+    if (session.remaining_time_seconds or 0) <= 0 or answered_count >= max_questions:
+        interview_completed = True
+    else:
+        next_question = _create_next_question(db, session, result, answer_text)
+        interview_completed = next_question is None
+
     if interview_completed:
         session.status = "completed"
         session.ended_at = now
         db.commit()
+        return {
+            "ok": True,
+            "interview_completed": True,
+            "remaining_total_seconds": int(session.remaining_time_seconds or 0),
+            "next_question": None,
+            "question_number": answered_count,
+            "max_questions": max_questions,
+            "time_limit_seconds": 0,
+        }
 
+    db.commit()
+    db.refresh(next_question)
     return {
         "ok": True,
-        "next_question_index": None if interview_completed else next_index,
-        "interview_completed": interview_completed,
+        "interview_completed": False,
+        "remaining_total_seconds": int(session.remaining_time_seconds or 0),
+        "next_question": _serialize_question(next_question),
+        "question_number": answered_count + 1,
+        "max_questions": max_questions,
+        "time_limit_seconds": int(next_question.allotted_seconds or session.per_question_seconds or 60),
     }
 
 
@@ -263,56 +333,103 @@ def interview_answer(
 def upload_proctor_frame(
     file: UploadFile = File(...),
     session_id: int = Form(...),
-    event_flags: str = Form("{}"),
-    motion_score: float = Form(0.0),
-    faces_count: int = Form(0),
-    event_type: str = Form(""),
+    event_type: str = Form("scan"),
     current_user: SessionUser = Depends(require_role("candidate")),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     session = _get_candidate_session_or_403(db, session_id, current_user)
 
-    try:
-        flags_payload = json.loads(event_flags) if event_flags else {}
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=400, detail="event_flags must be valid JSON") from exc
+    raw = file.file.read()
+    frame = analyze_frame(session.id, raw)
+    if not frame["ok"]:
+        raise HTTPException(status_code=400, detail=str(frame["error"]))
 
-    if not isinstance(flags_payload, dict):
-        flags_payload = {}
-    normalized_flags = {str(key): bool(value) for key, value in flags_payload.items()}
+    faces_count = int(frame["faces_count"])
+    motion_score = float(frame["motion_score"])
+    current_signature = frame["face_signature"]
+    opencv_enabled = bool(frame.get("opencv_enabled"))
+    baseline_signature = None
+    if session.baseline_face_signature:
+        try:
+            baseline_signature = [float(item) for item in json.loads(session.baseline_face_signature)]
+        except Exception:
+            baseline_signature = None
 
-    resolved_event_type = (event_type or "").strip()
-    if not resolved_event_type:
-        if normalized_flags.get("no_face"):
-            resolved_event_type = "no_face"
-        elif normalized_flags.get("multi_face"):
-            resolved_event_type = "multi_face"
-        elif normalized_flags.get("high_motion"):
-            resolved_event_type = "high_motion"
+    face_similarity = None
+    if baseline_signature and current_signature:
+        face_similarity = compare_signatures(baseline_signature, current_signature)
+
+    requested_event = (event_type or "").strip().lower()
+    resolved_event_type = "periodic"
+    if requested_event == "baseline":
+        if not opencv_enabled:
+            resolved_event_type = "baseline"
+        elif faces_count == 1 and current_signature:
+            session.baseline_face_signature = json.dumps(current_signature)
+            session.baseline_face_captured_at = datetime.utcnow()
+            resolved_event_type = "baseline"
+        elif faces_count == 0:
+            resolved_event_type = "baseline_no_face"
         else:
-            resolved_event_type = "periodic"
+            resolved_event_type = "baseline_multi_face"
+    else:
+        if faces_count == 0:
+            resolved_event_type = "no_face"
+        elif faces_count > 1:
+            resolved_event_type = "multi_face"
+        elif (
+            baseline_signature
+            and current_signature
+            and face_similarity is not None
+            and face_similarity < FACE_MISMATCH_THRESHOLD
+        ):
+            resolved_event_type = "face_mismatch"
+        elif motion_score > HIGH_MOTION_THRESHOLD:
+            resolved_event_type = "high_motion"
+
+    suspicious = resolved_event_type in SUSPICIOUS_TYPES
+    should_store = suspicious or resolved_event_type.startswith("baseline")
+    if resolved_event_type == "periodic":
+        should_store = should_store_periodic(session.id, PERIODIC_SAVE_SECONDS)
+
+    if not should_store:
+        db.commit()
+        return {
+            "ok": True,
+            "stored": False,
+            "event_type": resolved_event_type,
+            "suspicious": False,
+            "motion_score": motion_score,
+            "faces_count": faces_count,
+        }
 
     session_dir = PROCTOR_UPLOAD_ROOT / str(session.id)
     session_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S%f")
     file_path = session_dir / f"{timestamp}.jpg"
-    with file_path.open("wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    file_path.write_bytes(raw)
 
     relative_path = file_path.relative_to(Path("uploads")).as_posix()
-    flag_score = sum(1.0 for value in normalized_flags.values() if value)
-    score = round(float(max(motion_score, 0.0)) + flag_score, 4)
-    if resolved_event_type == "baseline":
-        score = 0.0
+    score = motion_score
+    if resolved_event_type in {"no_face", "multi_face", "face_mismatch"}:
+        score += 1.0
+    elif resolved_event_type == "high_motion":
+        score += 0.7
+    elif resolved_event_type in {"baseline", "baseline_no_face", "baseline_multi_face"}:
+        score = 0.0 if resolved_event_type == "baseline" else 1.0
 
     event = ProctorEvent(
         session_id=session.id,
         event_type=resolved_event_type,
-        score=score,
+        score=round(float(score), 4),
         meta_json={
-            "event_flags": normalized_flags,
-            "motion_score": float(motion_score),
-            "faces_count": int(faces_count),
+            "faces_count": faces_count,
+            "motion_score": round(motion_score, 4),
+            "face_similarity": round(face_similarity, 4) if face_similarity is not None else None,
+            "baseline_ready": bool(session.baseline_face_signature),
+            "suspicious": suspicious,
+            "opencv_enabled": bool(frame.get("opencv_enabled")),
+            "requested_event_type": requested_event or "scan",
         },
         image_path=relative_path,
     )
@@ -322,9 +439,14 @@ def upload_proctor_frame(
 
     return {
         "ok": True,
+        "stored": True,
         "event_id": event.id,
         "event_type": event.event_type,
+        "suspicious": suspicious,
         "image_url": f"/uploads/{relative_path}",
+        "motion_score": motion_score,
+        "faces_count": faces_count,
+        "face_similarity": face_similarity,
     }
 
 
@@ -367,6 +489,9 @@ def hr_proctoring_timeline(
             "started_at": session.started_at,
             "ended_at": session.ended_at,
             "per_question_seconds": session.per_question_seconds,
+            "remaining_time_seconds": session.remaining_time_seconds,
+            "max_questions": session.max_questions,
+            "baseline_captured": bool(session.baseline_face_signature),
         },
         "timeline": [
             {
@@ -375,6 +500,7 @@ def hr_proctoring_timeline(
                 "event_type": event.event_type,
                 "score": float(event.score),
                 "meta_json": event.meta_json or {},
+                "suspicious": event.event_type in SUSPICIOUS_TYPES,
                 "image_url": f"{base_url}/uploads/{event.image_path}" if event.image_path else None,
             }
             for event in events
