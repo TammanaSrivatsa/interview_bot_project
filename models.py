@@ -53,6 +53,7 @@ class Result(Base):
     id = Column(Integer, primary_key=True, index=True)
     candidate_id = Column(Integer, ForeignKey("candidates.id"))
     job_id = Column(Integer, ForeignKey("jobs.id"))
+    application_id = Column(String(64), unique=True, nullable=True, index=True)
 
     score = Column(Float)
     shortlisted = Column(Boolean)
@@ -93,6 +94,11 @@ class InterviewQuestion(Base):
     text = Column(Text, nullable=False)
     difficulty = Column(String(30), default="medium", nullable=False)
     topic = Column(String(80), default="general", nullable=False)
+    answer_text = Column(Text, nullable=True)
+    answer_summary = Column(Text, nullable=True)
+    relevance_score = Column(Float, nullable=True)
+    time_taken_seconds = Column(Integer, nullable=True)
+    skipped = Column(Boolean, default=False, nullable=False)
 
     session = relationship("InterviewSession", back_populates="questions")
     answers = relationship("InterviewAnswer", back_populates="question")
@@ -126,3 +132,15 @@ class ProctorEvent(Base):
     image_path = Column(String(500), nullable=True)
 
     session = relationship("InterviewSession", back_populates="proctor_events")
+
+
+class InterviewProctorEvent(Base):
+    __tablename__ = "interview_proctor_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    interview_id = Column(Integer, ForeignKey("interview_sessions.id"), nullable=False, index=True)
+    question_id = Column(Integer, ForeignKey("interview_questions_v2.id"), nullable=True, index=True)
+    event_type = Column(String(80), nullable=False)
+    confidence = Column(Float, default=0.0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    snapshot_path = Column(String(500), nullable=True)
