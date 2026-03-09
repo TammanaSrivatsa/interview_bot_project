@@ -5,6 +5,8 @@ import { FaceDetection } from '@mediapipe/face_detection';
 import { Camera } from '@mediapipe/camera_utils';
 import Navbar from '../components/Navbar';
 
+const MEDIAPIPE_FACE_DETECTION_VERSION = '0.4.1646425229';
+
 function InterviewSession() {
   const { resultId } = useParams();
 
@@ -42,6 +44,7 @@ function InterviewSession() {
   const recognitionWatchdogRef = useRef(null);
   const shouldRestartRef = useRef(false);
   const isRecognizingRef = useRef(false);
+  const recorderStopPromiseRef = useRef(null);
   const countdownRef = useRef(null);
   const questionTimerRef = useRef(null);
   const totalSecondsRef = useRef(0);
@@ -171,6 +174,9 @@ function InterviewSession() {
       if (cameraAIRef.current) {
         cameraAIRef.current.stop();
       }
+      if (faceDetectionRef.current && typeof faceDetectionRef.current.close === 'function') {
+        faceDetectionRef.current.close();
+      }
     };
   }, [resultId]);
 
@@ -234,7 +240,6 @@ function InterviewSession() {
       setQuestionTimeLeft((prev) => {
         if (prev <= 1) {
           clearInterval(questionTimerRef.current);
-          stopLiveSpeechRecognition();
           nextQuestion(stream);
           return 0;
         }
@@ -270,60 +275,72 @@ function InterviewSession() {
   const startAIMonitoring = () => {
     if (!videoRef.current) return;
 
-    const faceDetection = new FaceDetection({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`
-    });
+    try {
+      const faceDetection = new FaceDetection({
+        locateFile: (file) =>
+          `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@${MEDIAPIPE_FACE_DETECTION_VERSION}/${file}`
+      });
 
-    faceDetection.setOptions({ model: 'short', minDetectionConfidence: 0.6 });
+      faceDetection.setOptions({ model: 'short', minDetectionConfidence: 0.6 });
 
-    faceDetection.onResults(async (results) => {
-      const now = Date.now();
+      faceDetection.onResults(async (results) => {
+        const now = Date.now();
 
-      if (!results.detections || results.detections.length === 0) {
-        if (!faceMissingStartRef.current) faceMissingStartRef.current = now;
-        if (now - faceMissingStartRef.current > 3000) {
-          faceMissingStartRef.current = null;
-          await logViolation('face', 'Face not detected');
+        if (!results.detections || results.detections.length === 0) {
+          if (!faceMissingStartRef.current) faceMissingStartRef.current = now;
+          if (now - faceMissingStartRef.current > 3000) {
+            faceMissingStartRef.current = null;
+            await logViolation('face', 'Face not detected');
+          }
+          return;
         }
-        return;
-      }
-      faceMissingStartRef.current = null;
+        faceMissingStartRef.current = null;
 
-      if (results.detections.length > 1) {
-        if (!multiFaceStartRef.current) multiFaceStartRef.current = now;
-        if (now - multiFaceStartRef.current > 3000) {
-          multiFaceStartRef.current = null;
-          await logViolation('multi', 'Multiple people detected');
+        if (results.detections.length > 1) {
+          if (!multiFaceStartRef.current) multiFaceStartRef.current = now;
+          if (now - multiFaceStartRef.current > 3000) {
+            multiFaceStartRef.current = null;
+            await logViolation('multi', 'Multiple people detected');
+          }
+          return;
         }
-        return;
-      }
-      multiFaceStartRef.current = null;
+        multiFaceStartRef.current = null;
 
-      const box = results.detections[0].boundingBox;
-      if (box.xCenter < 0.2 || box.xCenter > 0.8) {
-        if (!headTurnStartRef.current) headTurnStartRef.current = now;
-        if (now - headTurnStartRef.current > 3000) {
+        const box = results.detections[0].boundingBox;
+        if (box.xCenter < 0.2 || box.xCenter > 0.8) {
+          if (!headTurnStartRef.current) headTurnStartRef.current = now;
+          if (now - headTurnStartRef.current > 3000) {
+            headTurnStartRef.current = null;
+            await logViolation('head', 'Candidate looking away repeatedly');
+          }
+        } else {
           headTurnStartRef.current = null;
-          await logViolation('head', 'Candidate looking away repeatedly');
         }
-      } else {
-        headTurnStartRef.current = null;
-      }
-    });
+      });
 
-    const camera = new Camera(videoRef.current, {
-      onFrame: async () => {
-        if (videoRef.current) {
-          await faceDetection.send({ image: videoRef.current });
-        }
-      },
-      width: 640,
-      height: 480
-    });
+      const camera = new Camera(videoRef.current, {
+        onFrame: async () => {
+          if (!videoRef.current || videoRef.current.readyState < 2) return;
+          try {
+            await faceDetection.send({ image: videoRef.current });
+          } catch (error) {
+            setStatusText('Interview in progress (AI monitor unavailable)');
+            if (cameraAIRef.current) {
+              cameraAIRef.current.stop();
+              cameraAIRef.current = null;
+            }
+          }
+        },
+        width: 640,
+        height: 480
+      });
 
-    camera.start();
-    faceDetectionRef.current = faceDetection;
-    cameraAIRef.current = camera;
+      camera.start();
+      faceDetectionRef.current = faceDetection;
+      cameraAIRef.current = camera;
+    } catch (error) {
+      setStatusText('Interview in progress (AI monitor unavailable)');
+    }
   };
 
   const processBackendQueue = async () => {
@@ -373,6 +390,16 @@ function InterviewSession() {
     }
   };
 
+  const waitForBackendQueueFlush = async (timeoutMs = 5000) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (backendQueueRef.current.length === 0 && backendPendingRef.current === 0) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+  };
+
   const startParallelAudioTranscription = (stream) => {
     const source = audioStreamRef.current || (stream ? new MediaStream(stream.getAudioTracks()) : null);
     if (!source) return;
@@ -395,23 +422,51 @@ function InterviewSession() {
         processBackendQueue();
       };
 
+      recorder.onstop = () => {
+        if (recorderStopPromiseRef.current) {
+          recorderStopPromiseRef.current();
+          recorderStopPromiseRef.current = null;
+        }
+      };
+
       recorder.start(3000);
     } catch (error) {
       // no-op
     }
   };
 
-  const stopParallelAudioTranscription = () => {
+  const stopParallelAudioTranscription = async ({ flush = false } = {}) => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       try {
-        mediaRecorderRef.current.stop();
+        if (flush) {
+          await new Promise((resolve) => {
+            let done = false;
+            const settle = () => {
+              if (done) return;
+              done = true;
+              resolve();
+            };
+            recorderStopPromiseRef.current = settle;
+            mediaRecorderRef.current.stop();
+            setTimeout(settle, 1200);
+          });
+        } else {
+          mediaRecorderRef.current.stop();
+        }
       } catch (error) {
         // no-op
       }
     }
+
+    if (flush) {
+      await waitForBackendQueueFlush(5000);
+      updateVisibleAnswer();
+    } else {
+      backendQueueRef.current = [];
+      backendPendingRef.current = 0;
+    }
+
     mediaRecorderRef.current = null;
-    backendQueueRef.current = [];
-    backendPendingRef.current = 0;
   };
 
   const startLiveSpeechRecognition = (stream) => {
@@ -467,8 +522,18 @@ function InterviewSession() {
         }
       }
 
-      finalTranscriptRef.current = normalizeTranscript(fullFinal);
-      interimTranscriptRef.current = interimTranscript;
+      const currentFinal = normalizeTranscript(fullFinal);
+      if (currentFinal) {
+        if (
+          !finalTranscriptRef.current ||
+          currentFinal.toLowerCase().startsWith(finalTranscriptRef.current.toLowerCase())
+        ) {
+          finalTranscriptRef.current = currentFinal;
+        } else {
+          finalTranscriptRef.current = appendWithOverlap(finalTranscriptRef.current, currentFinal);
+        }
+      }
+      interimTranscriptRef.current = normalizeTranscript(interimTranscript);
       updateVisibleAnswer();
       lastSpeechAtRef.current = Date.now();
     };
@@ -502,10 +567,9 @@ function InterviewSession() {
     }, 2000);
   };
 
-  const stopLiveSpeechRecognition = () => {
+  const stopLiveSpeechRecognition = async ({ flushAudio = false } = {}) => {
     shouldRestartRef.current = false;
     isRecognizingRef.current = false;
-    stopParallelAudioTranscription();
     if (restartTimeoutRef.current) {
       clearTimeout(restartTimeoutRef.current);
       restartTimeoutRef.current = null;
@@ -521,6 +585,7 @@ function InterviewSession() {
         // no-op
       }
     }
+    await stopParallelAudioTranscription({ flush: flushAudio });
   };
 
   const waitForSpeechFinalize = () =>
@@ -567,7 +632,7 @@ function InterviewSession() {
 
   const nextQuestion = async (stream) => {
     try {
-      stopLiveSpeechRecognition();
+      await stopLiveSpeechRecognition({ flushAudio: true });
       await waitForSpeechFinalize();
 
       const formData = new FormData();
@@ -639,7 +704,7 @@ function InterviewSession() {
     if (endedRef.current) return;
     endedRef.current = true;
 
-    stopLiveSpeechRecognition();
+    await stopLiveSpeechRecognition({ flushAudio: true });
     clearInterval(countdownRef.current);
     clearInterval(questionTimerRef.current);
     window.speechSynthesis.cancel();
@@ -652,6 +717,9 @@ function InterviewSession() {
     }
     if (cameraAIRef.current) {
       cameraAIRef.current.stop();
+    }
+    if (faceDetectionRef.current && typeof faceDetectionRef.current.close === 'function') {
+      faceDetectionRef.current.close();
     }
     if (videoRef.current) {
       videoRef.current.srcObject = null;

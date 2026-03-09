@@ -300,6 +300,20 @@ def _append_timeline(request: Request, event: str):
     request.session["timeline"] = timeline
 
 
+def _prefer_richer_answer(existing: str, incoming: str) -> str:
+    existing_clean = (existing or "").strip()
+    incoming_clean = (incoming or "").strip()
+    if not existing_clean:
+        return incoming_clean
+    if not incoming_clean:
+        return existing_clean
+
+    # Prefer the answer with more words (usually fuller transcript).
+    existing_words = len(existing_clean.split())
+    incoming_words = len(incoming_clean.split())
+    return incoming_clean if incoming_words >= existing_words else existing_clean
+
+
 @router.get("/interview/{result_id}")
 def interview_page(
     result_id: int,
@@ -405,7 +419,7 @@ def generate_next_question(
     if last_question_id and last_answer.strip():
         prev_q = db.query(InterviewQuestion).filter(InterviewQuestion.id == last_question_id).first()
         if prev_q:
-            prev_q.answer_text = last_answer.strip()
+            prev_q.answer_text = _prefer_richer_answer(prev_q.answer_text or "", last_answer)
             db.commit()
             _append_timeline(request, "Candidate answered a question")
 
@@ -727,8 +741,8 @@ async def complete_interview(request: Request, db: Session = Depends(get_db)):
     last_question_id = request.session.get("last_question_id")
     if last_question_id and pending_answer:
         prev_q = db.query(InterviewQuestion).filter(InterviewQuestion.id == last_question_id).first()
-        if prev_q and (not (prev_q.answer_text or "").strip()):
-            prev_q.answer_text = pending_answer
+        if prev_q:
+            prev_q.answer_text = _prefer_richer_answer(prev_q.answer_text or "", pending_answer)
             _append_timeline(request, "Candidate answered final question")
 
     incoming_violations = data.get("violations", []) or []
