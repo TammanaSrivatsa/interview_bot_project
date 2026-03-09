@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@mediapipe/face_detection": "^0.4.1646425229"
+  }
+}

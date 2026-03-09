@@ -1,6 +1,16 @@
-from sqlalchemy import Column, Integer, String, Boolean, Float, JSON, ForeignKey, Text
-from sqlalchemy.orm import relationship
 from database import Base
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
+from sqlalchemy.orm import relationship
 
 
 # --------------------------------------------------
@@ -43,6 +53,7 @@ class JobDescription(Base):
 
     id = Column(Integer, primary_key=True)
     company_id = Column(Integer, ForeignKey("hr.id"))
+    company_name = Column(String(200))
     jd_text = Column(String)
     skill_scores = Column(JSON)
     gender_requirement = Column(String(50))
@@ -67,19 +78,27 @@ class Result(Base):
     shortlisted = Column(Boolean)
     explanation = Column(JSON)
 
+    # Existing interview tracking (DO NOT MODIFY)
     interview_date = Column(String, nullable=True)
     interview_link = Column(String, nullable=True)
+    interview_start_time = Column(String, nullable=True)
+    interview_end_time = Column(String, nullable=True)
+    interview_abandoned = Column(Boolean, default=False)
 
-    # 🔥 ADD THIS
+    # Existing
     interview_questions = Column(JSON, nullable=True)
     interview_token = Column(String, nullable=True)
+
+    # SAFE ADDITIONS (no effect on existing workflow)
+    screening_completed = Column(Boolean, default=False)
+    screened_at = Column(DateTime, nullable=True)
 
     candidate = relationship("Candidate", back_populates="results")
     job = relationship("JobDescription", back_populates="results")
 
 
 # --------------------------------------------------
-# Interview Session Table (NEW)
+# Interview Session Table
 # --------------------------------------------------
 class InterviewSession(Base):
     __tablename__ = "interviews"
@@ -92,12 +111,30 @@ class InterviewSession(Base):
     final_score = Column(Float, nullable=True)
     overall_feedback = Column(Text, nullable=True)
 
+    # Candidate selected interview date & time
+    scheduled_at = Column(DateTime, nullable=True)
+
+    # Actual interview start time
+    started_at = Column(DateTime, nullable=True)
+
+    # Actual interview end time
+    ended_at = Column(DateTime, nullable=True)
+
+    # If candidate closed tab / logged out
+    abandoned = Column(Boolean, default=False)
+
+    # If interview completed normally
+    completed = Column(Boolean, default=False)
+
+    # Suspicious activity flag
+    suspicious_activity = Column(Boolean, default=False)
+
     candidate = relationship("Candidate", back_populates="interviews")
     questions = relationship("InterviewQuestion", back_populates="interview")
 
 
 # --------------------------------------------------
-# Interview Questions Table (NEW)
+# Interview Questions Table
 # --------------------------------------------------
 class InterviewQuestion(Base):
     __tablename__ = "interview_questions"

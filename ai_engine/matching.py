@@ -1,8 +1,9 @@
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
+import re
+
 import PyPDF2
 from docx import Document
-import re
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 
 # --------------------------------------------------
 # Load model globally (VERY IMPORTANT for speed)
@@ -43,21 +44,73 @@ def extract_text_from_file(file_path):
 def extract_skills_from_jd(jd_path):
     jd_text = extract_text_from_file(jd_path).lower()
 
-    TECH_SKILLS = [
-        "python", "java", "c++", "c#", "javascript", "typescript",
-        "react", "angular", "vue", "node", "django", "flask",
-        "spring boot", "sql", "mysql", "postgresql", "mongodb",
-        "machine learning", "deep learning", "nlp",
-        "tensorflow", "pytorch",
-        "aws", "azure", "gcp",
-        "docker", "kubernetes",
-        "git", "linux",
-        "power bi", "tableau",
-        "html", "css",
-        "data analysis", "data science"
-    ]
+    # Canonical skill -> text aliases found in JDs.
+    # This avoids misses like "Node.js", "NodeJS", "RESTful APIs", etc.
+    skill_aliases = {
+        "python": ["python"],
+        "java": ["java"],
+        "c++": ["c++", "cpp"],
+        "c#": ["c#", "c sharp"],
+        "javascript": ["javascript", "js"],
+        "typescript": ["typescript", "ts"],
+        "react": ["react", "react.js", "reactjs"],
+        "angular": ["angular", "angularjs"],
+        "vue": ["vue", "vue.js", "vuejs"],
+        "node": ["node", "node.js", "nodejs"],
+        "express": ["express", "express.js", "expressjs"],
+        "django": ["django"],
+        "flask": ["flask"],
+        "fastapi": ["fastapi"],
+        "spring boot": ["spring boot", "springboot"],
+        "sql": ["sql"],
+        "mysql": ["mysql"],
+        "postgresql": ["postgresql", "postgres", "psql"],
+        "mongodb": ["mongodb", "mongo db", "mongo"],
+        "redis": ["redis"],
+        "machine learning": ["machine learning", "ml"],
+        "deep learning": ["deep learning", "dl"],
+        "nlp": ["nlp", "natural language processing"],
+        "tensorflow": ["tensorflow", "tf"],
+        "pytorch": ["pytorch"],
+        "scikit-learn": ["scikit-learn", "sklearn"],
+        "pandas": ["pandas"],
+        "numpy": ["numpy"],
+        "aws": ["aws", "amazon web services"],
+        "azure": ["azure", "microsoft azure"],
+        "gcp": ["gcp", "google cloud", "google cloud platform"],
+        "docker": ["docker"],
+        "kubernetes": ["kubernetes", "k8s"],
+        "git": ["git", "github", "gitlab", "bitbucket"],
+        "linux": ["linux", "unix"],
+        "power bi": ["power bi", "powerbi"],
+        "tableau": ["tableau"],
+        "html": ["html", "html5"],
+        "css": ["css", "css3"],
+        "bootstrap": ["bootstrap"],
+        "tailwind": ["tailwind", "tailwindcss"],
+        "rest api": ["rest api", "restful api", "restful apis", "apis"],
+        "graphql": ["graphql"],
+        "microservices": ["microservices", "microservice"],
+        "ci/cd": ["ci/cd", "ci cd", "continuous integration", "continuous deployment"],
+        "data analysis": ["data analysis", "analytics"],
+        "data science": ["data science"],
+    }
 
-    return [skill for skill in TECH_SKILLS if skill in jd_text]
+    detected = []
+
+    for canonical, aliases in skill_aliases.items():
+        for alias in aliases:
+            # Keep symbols for "c++", "c#", and "ci/cd", while using word boundaries where possible.
+            if any(ch in alias for ch in ["+", "#", "/"]):
+                if alias in jd_text:
+                    detected.append(canonical)
+                    break
+            else:
+                if re.search(rf"\b{re.escape(alias)}\b", jd_text):
+                    detected.append(canonical)
+                    break
+
+    return detected
 
 
 # --------------------------------------------------
@@ -69,7 +122,7 @@ def calculate_semantic_score(jd_text, resume_text):
 
     similarity = cosine_similarity(
         [jd_embedding],
-        [resume_embedding]
+        [resume_embedding],
     )[0][0]
 
     return float(similarity)
@@ -106,7 +159,7 @@ def extract_education(text):
     education_map = {
         "phd": ["phd", "doctorate"],
         "master": ["master", "m.tech", "msc", "mba", "mca"],
-        "bachelor": ["bachelor", "b.tech", "bsc", "be", "bca"]
+        "bachelor": ["bachelor", "b.tech", "bsc", "be", "bca"],
     }
 
     for level, keywords in education_map.items():
@@ -122,7 +175,7 @@ def extract_education(text):
 # --------------------------------------------------
 def extract_experience(text):
     text = text.lower()
-    matches = re.findall(r'(\d+)\s*(?:years|year|yrs|yr)', text)
+    matches = re.findall(r"(\d+)\s*(?:years|year|yrs|yr)", text)
 
     if matches:
         return max([int(m) for m in matches])
@@ -140,7 +193,7 @@ def extract_academic_percentages(text):
     academic_data = {
         "10th": None,
         "intermediate": None,
-        "engineering": None
+        "engineering": None,
     }
 
     # -------------------------
@@ -158,20 +211,20 @@ def extract_academic_percentages(text):
         academic_data["intermediate"] = float(inter.group(2))
 
     # ------------------------------------------------
-    # 🔥 Engineering Detection (SUPER ROBUST)
+    # Engineering Detection (SUPER ROBUST)
     # ------------------------------------------------
 
-    # 1️⃣ Direct percentage near engineering keywords
+    # 1) Direct percentage near engineering keywords
     eng_percent = re.search(
         r"(engineering|b\.?tech|b\.?e|bachelor).*?(\d{2,3}(?:\.\d+)?)\s*%",
-        text
+        text,
     )
 
     if eng_percent:
         academic_data["engineering"] = float(eng_percent.group(2))
         return academic_data
 
-    # 2️⃣ CGPA detection anywhere in resume
+    # 2) CGPA detection anywhere in resume
     cgpa_match = re.search(r"cgpa\s*[:\-]?\s*(\d+(?:\.\d+)?)", text)
 
     if cgpa_match:
@@ -185,7 +238,7 @@ def extract_academic_percentages(text):
 
         return academic_data
 
-    # 3️⃣ Generic GPA detection fallback
+    # 3) Generic GPA detection fallback
     gpa_match = re.search(r"(\d+(?:\.\d+)?)\s*(cgpa|gpa)", text)
 
     if gpa_match:
@@ -196,6 +249,8 @@ def extract_academic_percentages(text):
             academic_data["engineering"] = gpa
 
     return academic_data
+
+
 # --------------------------------------------------
 # FINAL AI SCORING ENGINE
 # --------------------------------------------------
@@ -204,9 +259,8 @@ def final_score(
     resume_path,
     skill_scores_dict,
     education_requirement=None,
-    experience_requirement=0
+    experience_requirement=0,
 ):
-
     jd_text = extract_text_from_file(jd_path)
     resume_text = extract_text_from_file(resume_path)
 
@@ -219,16 +273,15 @@ def final_score(
     # Skills
     skill_score, matched_skills = calculate_skill_score(
         skill_scores_dict,
-        resume_text
+        resume_text,
     )
 
-        # Education Check (Improved Matching)
+    # Education Check (Improved Matching)
     candidate_education = extract_education(resume_text)
     education_score = 1.0
     education_reason = "Education requirement satisfied."
 
     if education_requirement:
-
         req = education_requirement.lower()
 
         # Normalize resume education
@@ -281,11 +334,11 @@ def final_score(
 
     # Final Score Calculation
     final = (
-        semantic_score * 0.30 +
-        skill_score * 0.25 +
-        education_score * 0.15 +
-        experience_score * 0.15 +
-        percentage_score * 0.15
+        semantic_score * 0.30
+        + skill_score * 0.25
+        + education_score * 0.15
+        + experience_score * 0.15
+        + percentage_score * 0.15
     )
 
     final_percentage = round(final * 100, 2)
@@ -298,7 +351,7 @@ def final_score(
         "experience_reason": experience_reason,
         "total_experience_detected": candidate_experience,
         "academic_percentages": academic_percentages,
-        "percentage_reason": percentage_reason
+        "percentage_reason": percentage_reason,
     }
 
     return final_percentage, explanation

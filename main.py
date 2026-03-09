@@ -1,20 +1,20 @@
-from fastapi import FastAPI, Request, Depends, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
-from starlette.middleware.sessions import SessionMiddleware
-from sqlalchemy.orm import Session
-from dotenv import load_dotenv
 import os
 
-from database import engine, SessionLocal
+from auth import verify_password, hash_password
+from database import SessionLocal, engine
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, Form, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from models import Base, Candidate, HR
-from auth import verify_password
-from routes import candidate, hr, interview   # ✅ Added interview router
+from routes import candidate, hr, interview, analysis
+from sqlalchemy.orm import Session
+from starlette.middleware.sessions import SessionMiddleware
 
 
 # --------------------------------------------------
-# Load environment variables
+# Load Environment Variables
 # --------------------------------------------------
 load_dotenv()
 
@@ -26,9 +26,15 @@ app = FastAPI(docs_url=None, redoc_url=None)
 
 
 # --------------------------------------------------
-# Static Files (Uploads)
+# CORS Middleware (React Frontend)
 # --------------------------------------------------
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # --------------------------------------------------
@@ -36,11 +42,23 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 # --------------------------------------------------
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.getenv("SECRET_KEY", "supersecretkey")  # fallback safe
+    secret_key=os.getenv("SECRET_KEY", "supersecretkey"),
+    same_site="lax",
+    https_only=False,
 )
 
 
-templates = Jinja2Templates(directory="templates")
+# --------------------------------------------------
+# Ensure Upload Folder Exists
+# --------------------------------------------------
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+# --------------------------------------------------
+# Static Files (Resumes / JD Files)
+# --------------------------------------------------
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 
 # --------------------------------------------------
@@ -61,14 +79,14 @@ def get_db():
 
 
 # --------------------------------------------------
-# Home (Login Page)
+# API Home
 # --------------------------------------------------
-@app.get("/", response_class=HTMLResponse)
-def home(request: Request):
-    return templates.TemplateResponse(
-        "login.html",
-        {"request": request}
-    )
+@app.get("/")
+def home():
+    return {
+        "message": "AI Interview Platform API running",
+        "frontend": "http://localhost:3000",
+    }
 
 
 # --------------------------------------------------
@@ -79,8 +97,9 @@ def login(
     request: Request,
     email: str = Form(...),
     password: str = Form(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
+
     user = db.query(Candidate).filter(Candidate.email == email).first()
     role = "candidate"
 
@@ -89,69 +108,70 @@ def login(
         role = "hr"
 
     if not user or not verify_password(password, user.password):
-        return templates.TemplateResponse(
-            "login.html",
-            {
-                "request": request,
-                "error": "Invalid credentials"
-            }
+
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Invalid credentials"},
         )
 
-    # Store session
+    # Save session
     request.session["user_id"] = user.id
     request.session["role"] = role
 
-    # Redirect based on role
-    if role == "candidate":
-        return RedirectResponse("/candidate/dashboard", status_code=303)
-    else:
-        return RedirectResponse("/hr/dashboard", status_code=303)
+    return JSONResponse({
+        "success": True,
+        "role": role,
+        "redirect": f"/{role}/dashboard",
+    })
 
 
 # --------------------------------------------------
-# Signup Page
-# --------------------------------------------------
-@app.get("/signup", response_class=HTMLResponse)
-def signup_page(request: Request):
-    return templates.TemplateResponse(
-        "signup.html",
-        {"request": request}
-    )
-
-
-# --------------------------------------------------
-# Signup Submission
+# Signup
 # --------------------------------------------------
 @app.post("/signup")
 def signup(
-    request: Request,
     role: str = Form(...),
     name: str = Form(...),
     email: str = Form(...),
     password: str = Form(...),
     gender: str = Form(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    from auth import hash_password
+
+    # Prevent duplicate accounts
+    existing_candidate = db.query(Candidate).filter(Candidate.email == email).first()
+    existing_hr = db.query(HR).filter(HR.email == email).first()
+
+    if existing_candidate or existing_hr:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Email already registered"},
+        )
 
     if role == "candidate":
+
         user = Candidate(
             name=name,
             email=email,
             password=hash_password(password),
-            gender=gender
+            gender=gender,
         )
+
     else:
+
         user = HR(
             company_name=name,
             email=email,
-            password=hash_password(password)
+            password=hash_password(password),
         )
 
     db.add(user)
     db.commit()
 
-    return RedirectResponse("/", status_code=303)
+    return JSONResponse({
+        "success": True,
+        "message": "Account created successfully",
+    })
 
 
 # --------------------------------------------------
@@ -159,8 +179,13 @@ def signup(
 # --------------------------------------------------
 @app.get("/logout")
 def logout(request: Request):
-    request.session.clear()  # 🔥 Clear entire session
-    return RedirectResponse("/", status_code=303)
+
+    request.session.clear()
+
+    return JSONResponse({
+        "success": True,
+        "message": "Logged out successfully",
+    })
 
 
 # --------------------------------------------------
@@ -168,4 +193,5 @@ def logout(request: Request):
 # --------------------------------------------------
 app.include_router(candidate.router)
 app.include_router(hr.router)
-app.include_router(interview.router)   # ✅ NEW
+app.include_router(interview.router)
+app.include_router(analysis.router)
