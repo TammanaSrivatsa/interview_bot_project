@@ -9,6 +9,8 @@ function DashboardHR() {
   const [shortlistedCandidates, setShortlistedCandidates] = useState([]);
   const [visibleDetails, setVisibleDetails] = useState({});
   const [latestJd, setLatestJd] = useState(null);
+  const [availableJds, setAvailableJds] = useState([]);
+  const [selectedJdId, setSelectedJdId] = useState('');
   const [uploading, setUploading] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
@@ -24,10 +26,13 @@ function DashboardHR() {
     return undefined;
   }, [successMessage]);
 
-  const fetchDashboard = async () => {
+  const fetchDashboard = async (jobId = '') => {
     try {
-      const response = await axios.get('/hr/dashboard');
+      const response = await axios.get('/hr/dashboard', {
+        params: jobId ? { job_id: jobId } : {},
+      });
       setLatestJd(response.data.latest_jd || null);
+      setAvailableJds(response.data.available_jds || []);
       setShortlistedCandidates(response.data.shortlisted_candidates || []);
     } catch (error) {
       console.error('Failed to fetch dashboard', error);
@@ -66,7 +71,8 @@ function DashboardHR() {
         setSuccessMessage(response.data.message);
         setAiSkills([]);
         setUploadedJd('');
-        fetchDashboard();
+        setSelectedJdId('');
+        fetchDashboard('');
       }
     } catch (error) {
       alert(error.response?.data?.error || 'Confirmation failed');
@@ -77,6 +83,12 @@ function DashboardHR() {
 
   const toggleDetails = (id) => {
     setVisibleDetails((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const handleRoleSelection = async (e) => {
+    const jobId = e.target.value;
+    setSelectedJdId(jobId);
+    await fetchDashboard(jobId);
   };
 
   const statusChip = (entry) => {
@@ -149,10 +161,27 @@ function DashboardHR() {
 
             <div className="ib-card ib-p-24 ib-card-soft">
               <h5 className="mb-3">Latest Active Role</h5>
+              {availableJds.length > 0 && (
+                <div className="mb-3">
+                  <label className="ib-label">Role Classification / JD</label>
+                  <select className="form-select" value={selectedJdId} onChange={handleRoleSelection}>
+                    <option value="">Latest Role</option>
+                    {availableJds.map((jd) => (
+                      <option key={jd.id} value={jd.id}>
+                        {jd.role_classification} - {jd.jd_text}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {latestJd ? (
                 <>
                   <div className="ib-status">
                     <strong>Company:</strong> {latestJd.company_name}
+                  </div>
+                  <div className="ib-status">
+                    <strong>Role:</strong> {latestJd.role_classification || 'General Role'}
                   </div>
                   <div className="ib-status">
                     <strong>JD File:</strong> <span className="ib-mono">{latestJd.jd_text}</span>

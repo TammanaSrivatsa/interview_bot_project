@@ -90,6 +90,7 @@ def generate_dynamic_question(
     anchor_topic=None,
     last_question=None,
     answer_topics=None,
+    followup_depth=0,
 ):
     recent_questions = [q.strip() for q in (asked_questions or "").split("\n") if q.strip()]
     recent_questions = recent_questions[-12:]
@@ -130,6 +131,8 @@ def generate_dynamic_question(
             "Follow up on the candidate's last answer with deeper implementation detail. "
             "Ask why they chose their approach and why not alternatives."
         )
+        if int(followup_depth or 0) >= 0:
+            answer_followup += f" This is follow-up depth {int(followup_depth or 0)} in the current thread."
 
     time_instruction = "Time is low; ask a concise high-signal question." if remaining_time_minutes <= 2 else "Ask a deep question requiring specific technical reasoning."
     length_instruction = "Keep it 14-24 words, max 30."
@@ -154,6 +157,15 @@ STAGE FOCUS:
 
 INTERVIEW INTENT:
 {intent_instruction}
+
+FOLLOW-UP DEPTH:
+{followup_depth}
+
+INTERVIEWER STYLE:
+- Sound like a live interviewer in a real interview room (natural spoken wording).
+- Ask one clear intent per turn.
+- Make the question feel like a direct continuation of the candidate's previous answer when possible.
+- Avoid robotic phrasing and avoid asking multiple independent questions together.
 
 PRIMARY TOPIC TO DRILL:
 {anchor_topic or "Best-fit topic from resume/JD"}
@@ -214,6 +226,9 @@ STRICT OUTPUT RULES:
 11. Prefer "why this design/technology over alternatives" style questions where applicable.
 12. Use only topics and technologies present in the resume context.
 13. Prefer follow-up depth from the candidate's previous answer before switching topics.
+14. If FOLLOW-UP DEPTH is 0 or 1 and LAST ANSWER is present, keep the next question in the same thread.
+15. Ask only one intent, not a bundled multi-part question.
+16. Wording should be natural and interviewer-like, not template-like.
 """
     model_candidates = _model_candidates()
 

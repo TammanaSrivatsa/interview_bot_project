@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
 import { FaceDetection } from '@mediapipe/face_detection';
@@ -21,6 +21,11 @@ function InterviewSession() {
   const [statusText, setStatusText] = useState('Waiting to begin');
   const [warningMessage, setWarningMessage] = useState('');
   const [violationCount, setViolationCount] = useState(0);
+  const [questionWindowSec, setQuestionWindowSec] = useState(0);
+  const [questionIndex, setQuestionIndex] = useState(0);
+  const [timelineEvents, setTimelineEvents] = useState([]);
+  const [isBotSpeaking, setIsBotSpeaking] = useState(false);
+  const [botViseme, setBotViseme] = useState('rest');
 
   const MAX_WARNINGS_PER_TYPE = 5;
 
@@ -60,6 +65,8 @@ function InterviewSession() {
   const endedRef = useRef(false);
   const lowConfidenceChunksRef = useRef(0);
   const currentQuestionRef = useRef('');
+  const aiMonitorDisposedRef = useRef(false);
+  const visemeIntervalRef = useRef(null);
 
   const normalizeTranscript = (text) =>
     (text || '')
@@ -106,6 +113,30 @@ function InterviewSession() {
 
   const addTimeline = (event) => {
     timelineRef.current.push({ event, time: new Date().toISOString() });
+    setTimelineEvents([...timelineRef.current.slice(-8)]);
+  };
+
+  const stopAIMonitoring = () => {
+    if (aiMonitorDisposedRef.current) return;
+    aiMonitorDisposedRef.current = true;
+
+    if (cameraAIRef.current) {
+      try {
+        cameraAIRef.current.stop();
+      } catch (error) {
+        // no-op
+      }
+      cameraAIRef.current = null;
+    }
+
+    if (faceDetectionRef.current && typeof faceDetectionRef.current.close === 'function') {
+      try {
+        faceDetectionRef.current.close();
+      } catch (error) {
+        // no-op (already disposed)
+      }
+      faceDetectionRef.current = null;
+    }
   };
 
   const getAdaptiveQuestionTime = (questionText) => {
@@ -164,6 +195,8 @@ function InterviewSession() {
       clearInterval(questionTimerRef.current);
       stopLiveSpeechRecognition();
       window.speechSynthesis.cancel();
+      setIsBotSpeaking(false);
+      setBotViseme('rest');
 
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
@@ -171,12 +204,7 @@ function InterviewSession() {
       if (audioStreamRef.current) {
         audioStreamRef.current.getTracks().forEach((track) => track.stop());
       }
-      if (cameraAIRef.current) {
-        cameraAIRef.current.stop();
-      }
-      if (faceDetectionRef.current && typeof faceDetectionRef.current.close === 'function') {
-        faceDetectionRef.current.close();
-      }
+      stopAIMonitoring();
     };
   }, [resultId]);
 
@@ -210,10 +238,45 @@ function InterviewSession() {
     };
   }, [interviewStarted, interviewEnded]);
 
+  useEffect(() => {
+    if (visemeIntervalRef.current) {
+      clearInterval(visemeIntervalRef.current);
+      visemeIntervalRef.current = null;
+    }
+
+    if (!isBotSpeaking) {
+      setBotViseme('rest');
+      return undefined;
+    }
+
+    const frames = ['aa', 'ee', 'oh', 'fv', 'rest', 'oh', 'aa'];
+    let idx = 0;
+    visemeIntervalRef.current = setInterval(() => {
+      setBotViseme(frames[idx % frames.length]);
+      idx += 1;
+    }, 110);
+
+    return () => {
+      if (visemeIntervalRef.current) {
+        clearInterval(visemeIntervalRef.current);
+        visemeIntervalRef.current = null;
+      }
+      setBotViseme('rest');
+    };
+  }, [isBotSpeaking]);
+
   const speak = (text, callback = null) => {
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
-    utter.onend = () => callback && callback();
+    utter.onstart = () => setIsBotSpeaking(true);
+    utter.onend = () => {
+      setIsBotSpeaking(false);
+      callback && callback();
+    };
+    utter.onerror = () => {
+      setIsBotSpeaking(false);
+      callback && callback();
+    };
     window.speechSynthesis.speak(utter);
   };
 
@@ -274,6 +337,7 @@ function InterviewSession() {
 
   const startAIMonitoring = () => {
     if (!videoRef.current) return;
+    aiMonitorDisposedRef.current = false;
 
     try {
       const faceDetection = new FaceDetection({
@@ -325,10 +389,7 @@ function InterviewSession() {
             await faceDetection.send({ image: videoRef.current });
           } catch (error) {
             setStatusText('Interview in progress (AI monitor unavailable)');
-            if (cameraAIRef.current) {
-              cameraAIRef.current.stop();
-              cameraAIRef.current = null;
-            }
+            stopAIMonitoring();
           }
         },
         width: 640,
@@ -618,7 +679,10 @@ function InterviewSession() {
       lowConfidenceChunksRef.current = 0;
       answerRef.current = '';
       setAnswer('');
-      setQuestionTimeLeft(getAdaptiveQuestionTime(res.data.question || ''));
+      const qWindow = getAdaptiveQuestionTime(res.data.question || '');
+      setQuestionWindowSec(qWindow);
+      setQuestionTimeLeft(qWindow);
+      setQuestionIndex(1);
       addTimeline('Question asked');
 
       speak(res.data.question, () => {
@@ -662,7 +726,10 @@ function InterviewSession() {
       lowConfidenceChunksRef.current = 0;
       answerRef.current = '';
       setAnswer('');
-      setQuestionTimeLeft(getAdaptiveQuestionTime(res.data.question || ''));
+      const qWindow = getAdaptiveQuestionTime(res.data.question || '');
+      setQuestionWindowSec(qWindow);
+      setQuestionTimeLeft(qWindow);
+      setQuestionIndex((prev) => prev + 1);
       addTimeline('Question asked');
 
       speak(res.data.question, () => {
@@ -708,6 +775,8 @@ function InterviewSession() {
     clearInterval(countdownRef.current);
     clearInterval(questionTimerRef.current);
     window.speechSynthesis.cancel();
+    setIsBotSpeaking(false);
+    setBotViseme('rest');
 
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
@@ -715,12 +784,7 @@ function InterviewSession() {
     if (audioStreamRef.current) {
       audioStreamRef.current.getTracks().forEach((track) => track.stop());
     }
-    if (cameraAIRef.current) {
-      cameraAIRef.current.stop();
-    }
-    if (faceDetectionRef.current && typeof faceDetectionRef.current.close === 'function') {
-      faceDetectionRef.current.close();
-    }
+    stopAIMonitoring();
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
@@ -750,59 +814,275 @@ function InterviewSession() {
     }
   };
 
+  const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+  const liveAnalysis = useMemo(() => {
+    const transcript = normalizeTranscript(answer || '');
+    const words = transcript ? transcript.split(/\s+/).filter(Boolean).length : 0;
+    const elapsedQuestionSeconds = Math.max(1, questionWindowSec - questionTimeLeft);
+    const wpm = Math.round((words / elapsedQuestionSeconds) * 60);
+
+    const fillerMatches = transcript.match(/\b(um|uh|like|you know|basically|actually|sort of|kind of)\b/gi) || [];
+    const sentenceCount = (transcript.match(/[.!?]/g) || []).length || (words > 0 ? 1 : 0);
+
+    const paceScore = clamp(100 - Math.abs(130 - wpm), 20, 98);
+    const clarityScore = clamp(92 - fillerMatches.length * 7 + sentenceCount * 2, 18, 98);
+    const confidenceScore = clamp(
+      90 - violationCount * 5 - lowConfidenceChunksRef.current * 3 - fillerMatches.length * 2,
+      12,
+      98
+    );
+    const completenessScore = clamp((words / 110) * 100, 8, 98);
+    const riskLevel = clamp(violationCount * 18 + lowConfidenceChunksRef.current * 11, 0, 100);
+
+    const mode = interviewEnded
+      ? 'Session closed'
+      : interviewStarted
+        ? questionTimeLeft <= 12
+          ? 'Final probing'
+          : 'Live adaptive questioning'
+        : 'Awaiting start';
+
+    return {
+      words,
+      wpm,
+      fillerCount: fillerMatches.length,
+      sentenceCount,
+      paceScore,
+      clarityScore,
+      confidenceScore,
+      completenessScore,
+      riskLevel,
+      mode
+    };
+  }, [answer, interviewEnded, interviewStarted, questionTimeLeft, questionWindowSec, violationCount]);
+
   return (
     <>
       <Navbar showLogout />
-      <div className="ib-shell">
-        <div className="ib-container ib-grid ib-grid-2 ib-interview-layout">
-          <section className="ib-card ib-p-24">
-            {warningMessage && <div className="alert alert-warning">{warningMessage}</div>}
+      <div className="ib-shell ib-session-shell">
+        <div className="ib-session-bg orb-one" />
+        <div className="ib-session-bg orb-two" />
 
-            <h3 className="mb-1">Candidate: {candidateName || 'Loading...'}</h3>
-            <div className="small text-muted mb-3">{statusText}</div>
-
-            <div className="ib-timer">Time Remaining: {timeRemaining}</div>
-            <div className="mt-2 mb-3">
-              <strong>Question Timer:</strong> {questionTimeLeft}s
+        <div className="ib-container ib-session-layout">
+          <section className="ib-card ib-session-hero">
+            <div>
+              <div className="ib-kicker">Interview Mission Control</div>
+              <h2 className="ib-session-title">Real-Time Interview Session</h2>
+              <p className="ib-session-subtitle">
+                AI interviewer asks dynamic questions and adapts depth based on candidate responses.
+              </p>
             </div>
-
-            <div className="ib-question mb-3">{question}</div>
-
-            <textarea value={answer} readOnly className="form-control" style={{ minHeight: '160px' }} />
-
-            <div className="d-flex gap-2 mt-3 flex-wrap">
-              <button
-                onClick={startInterview}
-                disabled={interviewStarted || interviewEnded}
-                className="btn btn-primary"
-              >
-                Start Interview
-              </button>
-
-              <button
-                onClick={() => nextQuestion(streamRef.current)}
-                disabled={!interviewStarted || interviewEnded}
-                className="btn btn-outline-dark"
-              >
-                Submit & Next
-              </button>
-
-              <button onClick={() => endInterview('abandoned')} disabled={interviewEnded} className="btn btn-outline-danger">
-                End Session
-              </button>
+            <div className="ib-session-chips">
+              <span className="ib-chip ib-chip-brand">Candidate: {candidateName || 'Loading...'}</span>
+              <span className="ib-chip ib-chip-success">Mode: {liveAnalysis.mode}</span>
+              <span className="ib-chip ib-chip-danger">Risk: {liveAnalysis.riskLevel}%</span>
             </div>
           </section>
 
-          <aside className="ib-card ib-p-24">
-            <h5>Monitoring Preview</h5>
-            <video ref={videoRef} autoPlay muted playsInline className="ib-video-preview" />
-            <div className="small text-muted mt-3 ib-status mb-2">
-              Violations logged: <strong>{violationCount}</strong>
-            </div>
-            <div className="small text-muted ib-status mb-0">
-              Question time left: <strong>{questionTimeLeft}s</strong>
-            </div>
-          </aside>
+          <div className="ib-session-main-grid">
+            <section className="ib-card ib-p-24 ib-control-card">
+              {warningMessage && <div className="alert alert-warning">{warningMessage}</div>}
+
+              <div className={`ib-live-strip ${isBotSpeaking ? 'is-speaking' : ''}`}>
+                <div className="ib-live-dot" />
+                <span>Live Interview Bot</span>
+                {isBotSpeaking && (
+                  <div className="ib-voice-bars" aria-label="Bot is speaking">
+                    <span />
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                )}
+              </div>
+
+              <div className={`ib-bot-avatar ${isBotSpeaking ? 'is-speaking' : ''}`} aria-label="Interviewer avatar">
+                <svg className="ib-bot-svg" viewBox="0 0 140 170" role="img" aria-label="AI interviewer face">
+                  <defs>
+                    <linearGradient id="ibSkin" x1="0.15" y1="0.05" x2="0.88" y2="0.95">
+                      <stop offset="0%" stopColor="#f7d6bf" />
+                      <stop offset="55%" stopColor="#e8b997" />
+                      <stop offset="100%" stopColor="#d59f7a" />
+                    </linearGradient>
+                    <linearGradient id="ibHair" x1="0" y1="0" x2="1" y2="1">
+                      <stop offset="0%" stopColor="#1e293b" />
+                      <stop offset="100%" stopColor="#0f172a" />
+                    </linearGradient>
+                    <linearGradient id="ibSuit" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stopColor="#334155" />
+                      <stop offset="100%" stopColor="#0f172a" />
+                    </linearGradient>
+                    <radialGradient id="ibCheek" cx="50%" cy="50%" r="50%">
+                      <stop offset="0%" stopColor="#efb19d" stopOpacity="0.55" />
+                      <stop offset="100%" stopColor="#efb19d" stopOpacity="0" />
+                    </radialGradient>
+                  </defs>
+
+                  <path d="M18 150 Q40 118 70 116 Q100 118 122 150 Z" fill="url(#ibSuit)" />
+                  <path d="M56 120 L70 138 L84 120 Z" fill="#f8fafc" />
+                  <rect x="62" y="103" width="16" height="16" rx="6" fill="#d6a786" />
+
+                  <ellipse cx="70" cy="56" rx="40" ry="42" fill="url(#ibSkin)" />
+                  <ellipse cx="37" cy="59" rx="6" ry="9" fill="#dbab8c" />
+                  <ellipse cx="103" cy="59" rx="6" ry="9" fill="#dbab8c" />
+                  <ellipse cx="53" cy="66" rx="11" ry="8" fill="url(#ibCheek)" />
+                  <ellipse cx="87" cy="66" rx="11" ry="8" fill="url(#ibCheek)" />
+
+                  <path d="M30 49 Q28 16 69 13 Q112 16 110 50 Q103 28 84 22 Q70 19 56 22 Q37 28 30 49 Z" fill="url(#ibHair)" />
+                  <path d="M40 37 Q47 27 58 25" fill="none" stroke="#475569" strokeWidth="2.2" strokeLinecap="round" />
+                  <path d="M81 25 Q94 27 100 38" fill="none" stroke="#475569" strokeWidth="2.2" strokeLinecap="round" />
+
+                  <ellipse cx="54" cy="55" rx="9.5" ry="6.8" fill="#ffffff" />
+                  <ellipse cx="86" cy="55" rx="9.5" ry="6.8" fill="#ffffff" />
+                  <circle cx="54" cy="55" r="4.2" fill="#2b3a4f" className={`ib-bot-eye-svg ${isBotSpeaking ? 'is-speaking' : ''}`} />
+                  <circle cx="86" cy="55" r="4.2" fill="#2b3a4f" className={`ib-bot-eye-svg ${isBotSpeaking ? 'is-speaking' : ''}`} />
+                  <circle cx="55.2" cy="53.8" r="1.3" fill="#f8fafc" />
+                  <circle cx="87.2" cy="53.8" r="1.3" fill="#f8fafc" />
+                  <path d="M44 45 Q54 40 64 45" fill="none" stroke="#263448" strokeWidth="2.2" strokeLinecap="round" />
+                  <path d="M76 45 Q86 40 96 45" fill="none" stroke="#263448" strokeWidth="2.2" strokeLinecap="round" />
+
+                  <path d="M70 59 Q66 69 68 75 Q70 77 72 75 Q74 69 70 59 Z" fill="#d49a77" />
+                  <ellipse cx="66.5" cy="72.5" rx="1.1" ry="0.8" fill="#b88262" />
+                  <ellipse cx="73.5" cy="72.5" rx="1.1" ry="0.8" fill="#b88262" />
+
+                  <g className={`ib-viseme ib-viseme-${botViseme}`}>
+                    <ellipse className="mouth-rest" cx="70" cy="74" rx="10" ry="3.5" />
+                    <ellipse className="mouth-aa" cx="70" cy="75" rx="8" ry="10" />
+                    <ellipse className="mouth-ee" cx="70" cy="74" rx="13" ry="4.2" />
+                    <ellipse className="mouth-oh" cx="70" cy="75" rx="6" ry="8.5" />
+                    <path className="mouth-fv" d="M58 75 Q70 68 82 75 Q70 83 58 75 Z" />
+                  </g>
+                </svg>
+              </div>
+
+              <div className="ib-control-top">
+                <div className="ib-timer-wrap">
+                  <div className="ib-kicker">Session Clock</div>
+                  <div className="ib-timer">{timeRemaining}</div>
+                </div>
+                <div className="ib-timer-wrap">
+                  <div className="ib-kicker">Question Window</div>
+                  <div className="ib-qtime">{questionTimeLeft}s</div>
+                </div>
+                <div className="ib-timer-wrap">
+                  <div className="ib-kicker">Question #</div>
+                  <div className="ib-qtime">{questionIndex || '-'}</div>
+                </div>
+              </div>
+
+              <div className={`ib-question ib-question-panel ${isBotSpeaking ? 'is-speaking' : ''}`}>
+                <div className="ib-question-head">
+                  <span>Interviewer Question</span>
+                  <span className={`ib-speaking-badge ${isBotSpeaking ? 'on' : ''}`}>
+                    {isBotSpeaking ? 'Speaking...' : 'Waiting'}
+                  </span>
+                </div>
+                <div>{question}</div>
+              </div>
+
+              <label className="ib-kicker mt-3">Candidate Live Transcript</label>
+              <textarea value={answer} readOnly className="form-control ib-live-transcript" />
+
+              <div className="d-flex gap-2 mt-3 flex-wrap">
+                <button
+                  onClick={startInterview}
+                  disabled={interviewStarted || interviewEnded}
+                  className="btn ib-btn-session-primary"
+                >
+                  Start Interview
+                </button>
+
+                <button
+                  onClick={() => nextQuestion(streamRef.current)}
+                  disabled={!interviewStarted || interviewEnded}
+                  className="btn btn-outline-dark"
+                >
+                  Submit & Next
+                </button>
+
+                <button onClick={() => endInterview('abandoned')} disabled={interviewEnded} className="btn btn-outline-danger">
+                  End Session
+                </button>
+              </div>
+              <div className="small text-muted mt-2">{statusText}</div>
+            </section>
+
+            <aside className="ib-side-stack">
+              <section className="ib-card ib-p-24 ib-video-card">
+                <div className="ib-kicker">Proctoring Feed</div>
+                <video ref={videoRef} autoPlay muted playsInline className="ib-video-preview" />
+                <div className="ib-video-overlay">AI Vision Monitoring Active</div>
+                <div className="small text-muted mt-3 ib-status mb-2">
+                  Violations logged: <strong>{violationCount}</strong>
+                </div>
+                <div className="small text-muted ib-status mb-0">
+                  Transcription low-confidence chunks: <strong>{lowConfidenceChunksRef.current}</strong>
+                </div>
+              </section>
+
+              <section className="ib-card ib-p-24 ib-analysis-card">
+                <div className="ib-kicker">Candidate Analysis</div>
+                <div className="ib-analysis-grid">
+                  <div className="ib-stat">
+                    <div className="ib-stat-label">Words spoken</div>
+                    <div className="ib-stat-value">{liveAnalysis.words}</div>
+                  </div>
+                  <div className="ib-stat">
+                    <div className="ib-stat-label">Speaking pace</div>
+                    <div className="ib-stat-value">{liveAnalysis.wpm} WPM</div>
+                  </div>
+                </div>
+
+                <div className="ib-score-row">
+                  <div className="ib-score-row-head">
+                    <span>Confidence</span>
+                    <strong>{liveAnalysis.confidenceScore}%</strong>
+                  </div>
+                  <div className="ib-score-track">
+                    <div className="ib-score-fill ib-score-brand" style={{ width: `${liveAnalysis.confidenceScore}%` }} />
+                  </div>
+                </div>
+
+                <div className="ib-score-row">
+                  <div className="ib-score-row-head">
+                    <span>Clarity</span>
+                    <strong>{liveAnalysis.clarityScore}%</strong>
+                  </div>
+                  <div className="ib-score-track">
+                    <div className="ib-score-fill ib-score-success" style={{ width: `${liveAnalysis.clarityScore}%` }} />
+                  </div>
+                </div>
+
+                <div className="ib-score-row">
+                  <div className="ib-score-row-head">
+                    <span>Completeness</span>
+                    <strong>{liveAnalysis.completenessScore}%</strong>
+                  </div>
+                  <div className="ib-score-track">
+                    <div className="ib-score-fill ib-score-danger" style={{ width: `${liveAnalysis.completenessScore}%` }} />
+                  </div>
+                </div>
+
+                <div className="ib-analysis-note">
+                  Fillers: <strong>{liveAnalysis.fillerCount}</strong> | Sentences: <strong>{liveAnalysis.sentenceCount}</strong>
+                </div>
+              </section>
+
+              <section className="ib-card ib-p-24 ib-timeline-card">
+                <div className="ib-kicker">Session Trail</div>
+                <ul className="ib-session-trail">
+                  {timelineEvents.length === 0 && <li>Awaiting interview events...</li>}
+                  {timelineEvents.map((entry, idx) => (
+                    <li key={`${entry.time}-${idx}`}>
+                      <span>{entry.event}</span>
+                      <small>{new Date(entry.time).toLocaleTimeString()}</small>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            </aside>
+          </div>
         </div>
       </div>
     </>

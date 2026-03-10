@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Space+Grotesk:wght@500;700&display=swap");
+
 :root {
   --bg: #f3f4f6;
   --surface: #ffffff;
@@ -16,7 +18,7 @@
 
 body {
   margin: 0;
-  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  font-family: "Manrope", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
   background: radial-gradient(circle at top right, #e2e8f0 0%, var(--bg) 45%, #eef2ff 100%);
   color: var(--ink);
 }
@@ -267,6 +269,399 @@ body {
   min-width: 130px;
 }
 
+.ib-session-shell {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 8% 10%, rgba(15, 118, 110, 0.12) 0%, transparent 36%),
+    radial-gradient(circle at 92% 18%, rgba(245, 158, 11, 0.14) 0%, transparent 35%),
+    linear-gradient(150deg, #eef2ff 0%, #f8fafc 40%, #f1f5f9 100%);
+}
+
+.ib-session-bg {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(1px);
+  opacity: 0.32;
+  pointer-events: none;
+}
+
+.ib-session-bg.orb-one {
+  width: 280px;
+  height: 280px;
+  left: -120px;
+  top: 70px;
+  background: radial-gradient(circle, #14b8a6 0%, rgba(20, 184, 166, 0) 74%);
+}
+
+.ib-session-bg.orb-two {
+  width: 360px;
+  height: 360px;
+  right: -150px;
+  bottom: 30px;
+  background: radial-gradient(circle, #f59e0b 0%, rgba(245, 158, 11, 0) 73%);
+}
+
+.ib-session-layout {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  gap: 18px;
+}
+
+.ib-session-hero {
+  padding: 20px 24px;
+  background: linear-gradient(120deg, #0f172a 0%, #1e293b 50%, #0f766e 100%);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #f8fafc;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: end;
+  animation: ibFadeUp 420ms ease-out;
+}
+
+.ib-session-title {
+  margin: 6px 0 2px;
+  font-family: "Space Grotesk", "Manrope", sans-serif;
+  letter-spacing: 0.01em;
+  font-size: clamp(24px, 2.3vw, 32px);
+}
+
+.ib-session-subtitle {
+  margin: 0;
+  color: rgba(248, 250, 252, 0.82);
+}
+
+.ib-session-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.ib-session-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.95fr);
+  gap: 18px;
+}
+
+.ib-control-card,
+.ib-side-stack > .ib-card {
+  animation: ibFadeUp 520ms ease-out;
+}
+
+.ib-live-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 13px;
+  color: #0f172a;
+  border: 1px solid #dbeafe;
+  background: linear-gradient(90deg, #dbeafe 0%, #ecfeff 100%);
+  border-radius: 999px;
+  padding: 6px 12px;
+}
+
+.ib-live-strip.is-speaking {
+  border-color: #93c5fd;
+  background: linear-gradient(90deg, #dbeafe 0%, #cffafe 100%);
+}
+
+.ib-live-dot {
+  width: 9px;
+  height: 9px;
+  background: #ef4444;
+  border-radius: 999px;
+  box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+  animation: ibPulse 1.8s infinite;
+}
+
+.ib-control-top {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0 14px;
+}
+
+.ib-bot-avatar {
+  width: 126px;
+  margin: 14px 0 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  filter: drop-shadow(0 10px 18px rgba(15, 23, 42, 0.2));
+}
+
+.ib-bot-svg {
+  width: 126px;
+  height: auto;
+}
+
+.ib-bot-avatar.is-speaking .ib-bot-svg {
+  animation: ibHeadTalk 0.85s ease-in-out infinite;
+}
+
+.ib-bot-eye-svg.is-speaking {
+  animation: ibEyeBlink 2.6s linear infinite;
+}
+
+.ib-viseme .mouth-rest,
+.ib-viseme .mouth-aa,
+.ib-viseme .mouth-ee,
+.ib-viseme .mouth-oh,
+.ib-viseme .mouth-fv {
+  fill: #6f1d1b;
+  stroke: #4a1514;
+  stroke-width: 0.8px;
+  opacity: 0;
+  transform-origin: center;
+}
+
+.ib-viseme-rest .mouth-rest,
+.ib-viseme-aa .mouth-aa,
+.ib-viseme-ee .mouth-ee,
+.ib-viseme-oh .mouth-oh,
+.ib-viseme-fv .mouth-fv {
+  opacity: 1;
+}
+
+.ib-timer-wrap {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: #fff;
+}
+
+.ib-qtime {
+  font-size: 28px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.ib-question-panel {
+  border: 1px solid #d9e6ff;
+  border-radius: 14px;
+  background: linear-gradient(120deg, #eff6ff 0%, #f0fdfa 100%);
+  padding: 18px;
+}
+
+.ib-question-panel.is-speaking {
+  border-color: #67e8f9;
+  box-shadow: 0 0 0 4px rgba(103, 232, 249, 0.2);
+  animation: ibQuestionGlow 1.5s ease-in-out infinite;
+}
+
+.ib-question-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 10px;
+  color: #334155;
+}
+
+.ib-speaking-badge {
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  padding: 4px 9px;
+  font-size: 11px;
+  background: #fff;
+}
+
+.ib-speaking-badge.on {
+  border-color: #67e8f9;
+  color: #0e7490;
+  background: #ecfeff;
+}
+
+.ib-voice-bars {
+  display: inline-flex;
+  align-items: end;
+  gap: 3px;
+  margin-left: 4px;
+}
+
+.ib-voice-bars span {
+  width: 3px;
+  height: 8px;
+  border-radius: 999px;
+  background: #0369a1;
+  animation: ibVoiceBars 0.9s ease-in-out infinite;
+}
+
+.ib-voice-bars span:nth-child(2) {
+  animation-delay: 0.12s;
+}
+
+.ib-voice-bars span:nth-child(3) {
+  animation-delay: 0.24s;
+}
+
+.ib-voice-bars span:nth-child(4) {
+  animation-delay: 0.36s;
+}
+
+.ib-live-transcript {
+  min-height: 170px;
+  border-radius: 12px;
+  border-color: #cbd5e1;
+  background: #fbfdff;
+}
+
+.ib-btn-session-primary {
+  background: linear-gradient(90deg, #0f766e 0%, #0ea5e9 100%);
+  color: #fff;
+  border: none;
+  min-width: 138px;
+}
+
+.ib-btn-session-primary:hover {
+  background: linear-gradient(90deg, #115e59 0%, #0284c7 100%);
+  color: #fff;
+}
+
+.ib-side-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.ib-video-card {
+  position: relative;
+}
+
+.ib-video-overlay {
+  margin-top: 10px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #0f766e;
+  font-weight: 700;
+}
+
+.ib-analysis-card .ib-score-row {
+  margin-top: 14px;
+}
+
+.ib-analysis-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.ib-analysis-note {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.ib-timeline-card {
+  max-height: 265px;
+  overflow: auto;
+}
+
+.ib-session-trail {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ib-session-trail li {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  background: #fff;
+}
+
+.ib-session-trail li + li {
+  margin-top: 8px;
+}
+
+.ib-session-trail small {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+@keyframes ibPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6);
+  }
+  70% {
+    box-shadow: 0 0 0 9px rgba(239, 68, 68, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+}
+
+@keyframes ibFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ibVoiceBars {
+  0%,
+  100% {
+    transform: scaleY(0.55);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scaleY(1.45);
+    opacity: 1;
+  }
+}
+
+@keyframes ibQuestionGlow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgba(103, 232, 249, 0.18);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(34, 211, 238, 0.32);
+  }
+}
+
+@keyframes ibHeadTalk {
+  0% {
+    transform: rotate(0deg) translateY(0);
+  }
+  25% {
+    transform: rotate(-1.8deg) translateY(-1px);
+  }
+  75% {
+    transform: rotate(1.8deg) translateY(0);
+  }
+  100% {
+    transform: rotate(0deg) translateY(0);
+  }
+}
+
+@keyframes ibEyeBlink {
+  0%,
+  46%,
+  100% {
+    transform: scaleY(1);
+  }
+  48%,
+  50% {
+    transform: scaleY(0.2);
+  }
+}
+
 @media (max-width: 980px) {
   .ib-grid-auth,
   .ib-grid-2,
@@ -297,5 +692,27 @@ body {
 
   .ib-status {
     font-size: 13px;
+  }
+
+  .ib-session-main-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ib-session-hero {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .ib-session-chips {
+    justify-content: flex-start;
+  }
+
+  .ib-control-top,
+  .ib-analysis-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ib-qtime {
+    font-size: 24px;
   }
 }

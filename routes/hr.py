@@ -1,4 +1,5 @@
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +26,29 @@ def _safe_percent(value):
         return "N/A"
 
 
+def _classify_role_from_skills(skill_scores: dict) -> str:
+    skills = {str(k).lower() for k in (skill_scores or {}).keys()}
+    if not skills:
+        return "General Role"
+
+    if "python" in skills and "java" not in skills:
+        return "Python Developer"
+    if "java" in skills and "python" not in skills:
+        return "Java Developer"
+    if "python" in skills and "java" in skills:
+        return "Backend Developer"
+    if {"react", "javascript", "typescript"} & skills:
+        return "Frontend Developer"
+    if {"django", "flask", "fastapi", "spring", "node", "node.js"} & skills:
+        return "Backend Developer"
+    if {"aws", "azure", "gcp", "docker", "kubernetes", "devops"} & skills:
+        return "DevOps Engineer"
+    if {"sql", "mysql", "postgresql", "postgres", "mongodb"} & skills:
+        return "Data/Backend Role"
+
+    return "General Role"
+
+
 def get_db():
     db = SessionLocal()
     try:
@@ -42,24 +66,33 @@ def get_current_user(request: Request, db: Session):
 
 
 @router.get("/hr/dashboard")
-def hr_dashboard(request: Request, db: Session = Depends(get_db)):
+def hr_dashboard(
+    request: Request,
+    job_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
     user = get_current_user(request, db)
     if not user or user["role"] != "hr":
         return JSONResponse(status_code=401, content={"error": "Unauthorized"})
 
-    latest_jd = (
+    all_jds = (
         db.query(JobDescription)
         .filter(JobDescription.company_id == user["user_id"])
         .order_by(JobDescription.id.desc())
-        .first()
+        .all()
     )
+
+    latest_jd = all_jds[0] if all_jds else None
+    selected_jd = latest_jd
+    if job_id and all_jds:
+        selected_jd = next((j for j in all_jds if j.id == job_id), latest_jd)
 
     shortlisted_candidates = []
 
-    if latest_jd:
+    if selected_jd:
         results = (
             db.query(Result)
-            .filter(Result.job_id == latest_jd.id)
+            .filter(Result.job_id == selected_jd.id)
             .filter(Result.shortlisted.is_(True))
             .all()
         )
@@ -72,14 +105,14 @@ def hr_dashboard(request: Request, db: Session = Depends(get_db)):
             interview_session = (
                 db.query(InterviewSession)
                 .filter(InterviewSession.candidate_id == candidate.id)
-                .filter(InterviewSession.job_id == latest_jd.id)
+                .filter(InterviewSession.job_id == selected_jd.id)
                 .order_by(InterviewSession.id.desc())
                 .first()
             )
 
             explanation = result.explanation if isinstance(result.explanation, dict) else {}
             matched_skills = explanation.get("matched_skills", [])
-            jd_skills = list((latest_jd.skill_scores or {}).keys())
+            jd_skills = list((selected_jd.skill_scores or {}).keys())
             missing_skills = [skill for skill in jd_skills if skill not in matched_skills]
             academic = explanation.get("academic_percentages", {}) or {}
 
@@ -142,6 +175,8 @@ def hr_dashboard(request: Request, db: Session = Depends(get_db)):
                         "interview_start_time": result.interview_start_time,
                         "interview_end_time": result.interview_end_time,
                         "interview_abandoned": result.interview_abandoned,
+                        "hr_decision": explanation.get("hr_decision"),
+                        "hr_decision_at": explanation.get("hr_decision_at"),
                         "explanation": explanation,
                         "matched_skills": matched_skills,
                         "missing_skills": missing_skills,
@@ -204,17 +239,50 @@ def hr_dashboard(request: Request, db: Session = Depends(get_db)):
                 }
             )
 
+    summary = {
+        "total_selected": len(shortlisted_candidates),
+        "cleared_interview": 0,
+        "in_progress": 0,
+        "saved_candidates": 0,
+    }
+    for entry in shortlisted_candidates:
+        details = entry.get("interview_details", {})
+        result_data = entry.get("result", {})
+        status = (details.get("status") or "").lower()
+        completed = bool(details.get("completed"))
+        abandoned = bool(details.get("abandoned"))
+        hr_decision = (result_data.get("hr_decision") or "").lower()
+
+        if completed and not abandoned:
+            summary["cleared_interview"] += 1
+        if status == "in_progress":
+            summary["in_progress"] += 1
+        if hr_decision == "saved":
+            summary["saved_candidates"] += 1
+
     return JSONResponse(
         {
             "latest_jd": {
-                "id": latest_jd.id,
-                "company_name": latest_jd.company_name,
-                "jd_text": latest_jd.jd_text.split("\\")[-1] if latest_jd else None,
-                "skill_scores": latest_jd.skill_scores,
+                "id": selected_jd.id,
+                "company_name": selected_jd.company_name,
+                "jd_text": selected_jd.jd_text.split("\\")[-1] if selected_jd else None,
+                "skill_scores": selected_jd.skill_scores,
+                "role_classification": _classify_role_from_skills(selected_jd.skill_scores),
             }
-            if latest_jd
+            if selected_jd
             else None,
+            "available_jds": [
+                {
+                    "id": jd.id,
+                    "company_name": jd.company_name,
+                    "jd_text": jd.jd_text.split("\\")[-1] if jd.jd_text else None,
+                    "skill_scores": jd.skill_scores or {},
+                    "role_classification": _classify_role_from_skills(jd.skill_scores),
+                }
+                for jd in all_jds
+            ],
             "shortlisted_candidates": shortlisted_candidates,
+            "summary": summary,
         }
     )
 
@@ -376,3 +444,68 @@ def update_skill_weights(
     latest_jd.skill_scores = updated_skills
     db.commit()
     return JSONResponse({"success": True, "message": "Skill weights updated"})
+
+
+@router.post("/hr/candidate/save")
+def save_candidate(
+    request: Request,
+    result_id: int = Form(...),
+    db: Session = Depends(get_db),
+):
+    user = get_current_user(request, db)
+    if not user or user["role"] != "hr":
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+
+    result = db.query(Result).filter(Result.id == result_id).first()
+    if not result:
+        return JSONResponse(status_code=404, content={"error": "Result not found"})
+
+    job = (
+        db.query(JobDescription)
+        .filter(JobDescription.id == result.job_id)
+        .filter(JobDescription.company_id == user["user_id"])
+        .first()
+    )
+    if not job:
+        return JSONResponse(status_code=403, content={"error": "Forbidden"})
+
+    explanation = result.explanation if isinstance(result.explanation, dict) else {}
+    explanation["hr_decision"] = "saved"
+    explanation["hr_decision_at"] = datetime.now().isoformat()
+    result.explanation = explanation
+
+    db.commit()
+    return JSONResponse({"success": True, "message": "Candidate saved successfully"})
+
+
+@router.post("/hr/candidate/delete")
+def delete_candidate_from_shortlist(
+    request: Request,
+    result_id: int = Form(...),
+    db: Session = Depends(get_db),
+):
+    user = get_current_user(request, db)
+    if not user or user["role"] != "hr":
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+
+    result = db.query(Result).filter(Result.id == result_id).first()
+    if not result:
+        return JSONResponse(status_code=404, content={"error": "Result not found"})
+
+    job = (
+        db.query(JobDescription)
+        .filter(JobDescription.id == result.job_id)
+        .filter(JobDescription.company_id == user["user_id"])
+        .first()
+    )
+    if not job:
+        return JSONResponse(status_code=403, content={"error": "Forbidden"})
+
+    explanation = result.explanation if isinstance(result.explanation, dict) else {}
+    explanation["hr_decision"] = "deleted"
+    explanation["hr_decision_at"] = datetime.now().isoformat()
+    result.explanation = explanation
+    result.shortlisted = False
+
+    db.commit()
+    return JSONResponse({"success": True, "message": "Candidate deleted from shortlist"})

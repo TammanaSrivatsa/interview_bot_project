@@ -314,6 +314,105 @@ def _prefer_richer_answer(existing: str, incoming: str) -> str:
     return incoming_clean if incoming_words >= existing_words else existing_clean
 
 
+def _has_any_pattern(text: str, patterns: list[str]) -> bool:
+    low = (text or "").lower()
+    return any(re.search(p, low) for p in patterns)
+
+
+def _is_low_substance_answer(last_answer: str) -> bool:
+    answer = (last_answer or "").strip()
+    if not answer:
+        return True
+
+    tokens = re.findall(r"[a-zA-Z0-9+#./-]+", answer.lower())
+    if len(tokens) < 12:
+        return True
+
+    low_signal_starts = [
+        r"^(yes|no|maybe|not sure|i don'?t know|don'?t remember|can'?t recall)\b",
+        r"^(same as|as i said|already mentioned)\b",
+    ]
+    if any(re.search(p, answer.lower()) for p in low_signal_starts):
+        return True
+
+    return False
+
+
+def _build_real_interviewer_followup(
+    last_answer: str,
+    current_project: Optional[str],
+    anchor_topic: Optional[str],
+    followup_depth: int,
+    last_question_text: Optional[str] = None,
+) -> Optional[str]:
+    if not (last_answer or "").strip():
+        return None
+
+    project_hint = current_project or "that project"
+    topic_hint = anchor_topic or "that approach"
+    answer = (last_answer or "").lower()
+
+    has_metrics = _has_any_pattern(
+        answer,
+        [
+            r"\b\d+(\.\d+)?\s*(ms|s|sec|seconds|minutes|hrs|hours|%|x|k|m|gb|mb|rps|qps)\b",
+            r"\b(improved|reduced|increased|decreased|latency|throughput|cost|availability|uptime)\b",
+        ],
+    )
+    has_tradeoff = _has_any_pattern(
+        answer,
+        [r"\btrade[- ]?off\b", r"\binstead\b", r"\brather than\b", r"\bpros\b", r"\bcons\b"],
+    )
+    has_failures = _has_any_pattern(
+        answer,
+        [r"\bfail(ure|ed)?\b", r"\bincident\b", r"\boutage\b", r"\bbug\b", r"\berror\b"],
+    )
+    has_validation = _has_any_pattern(
+        answer,
+        [r"\btest(ing|ed|s)?\b", r"\bmonitor(ing|ed)?\b", r"\bmetrics?\b", r"\balert(s)?\b"],
+    )
+
+    if followup_depth == 0:
+        if not has_metrics:
+            return (
+                f"You mentioned {topic_hint} in {project_hint}. What measurable impact did it have, "
+                "and how did you verify those numbers?"
+            )
+        if not has_tradeoff:
+            return (
+                f"For {topic_hint} in {project_hint}, which alternatives did you evaluate, "
+                "and what tradeoff made you pick the final design?"
+            )
+        return (
+            f"Walk me through the exact implementation sequence for {topic_hint} in {project_hint}, "
+            "including the hardest technical decision."
+        )
+
+    if followup_depth == 1:
+        if not has_failures:
+            return (
+                f"In {project_hint}, what realistic failure mode could break {topic_hint}, "
+                "and how would your design detect and recover from it?"
+            )
+        if not has_validation:
+            return (
+                f"What tests and production signals did you use to validate {topic_hint} in {project_hint}, "
+                "and what thresholds did you track?"
+            )
+        return (
+            f"If you had to redesign {topic_hint} in {project_hint} today, "
+            "what would you change first and why?"
+        )
+
+    if followup_depth == 2 and last_question_text:
+        return (
+            f"Based on your answer to '{last_question_text[:80]}', "
+            f"what specific engineering metric would you optimize next in {project_hint}, and why?"
+        )
+
+    return None
+
+
 @router.get("/interview/{result_id}")
 def interview_page(
     result_id: int,
@@ -445,10 +544,10 @@ def generate_next_question(
     answer_tokens = [w for w in re.findall(r"[a-zA-Z0-9+#./-]+", (last_answer or "").strip()) if w]
     if answer_tokens:
         clarify_count = request.session.get("clarify_count", 0)
-        if len(answer_tokens) < 8 and clarify_count < 1:
+        if _is_low_substance_answer(last_answer) and clarify_count < 2:
             clarification = (
-                "Could you elaborate on that with a concrete example from one project, "
-                "including your role, technical decisions, and final outcome?"
+                "Could you give one concrete example from a project with your exact role, "
+                "the main technical decision you made, and the final measurable outcome?"
             )
             request.session["clarify_count"] = clarify_count + 1
 
@@ -590,6 +689,7 @@ def generate_next_question(
         request.session["current_topic"] = current_project
 
     question = None
+    used_forced_followup = False
     if phase == "project" and projects and len(projects) > 1 and (project_question_index % 5 == 4):
         # Periodic cross-project dynamic question
         p1 = _select_project_for_coverage(
@@ -613,41 +713,60 @@ def generate_next_question(
         )
     previous_questions = [q.strip() for q in asked_questions.split("\n") if q.strip()]
 
-    for _ in range(8):
-        try:
-            question = generate_dynamic_question(
-                jd_text=jd_text,
-                resume_text=resume_text,
-                last_answer=last_answer,
-                stage=stage,
-                asked_questions=asked_questions,
-                remaining_time_minutes=remaining_minutes,
-                current_project=current_project,
-                concepts=concepts,
-                projects=projects,
-                project_tech_map=request.session.get("project_tech_map", {}),
-                anchor_topic=anchor_topic,
-                last_question=request.session.get("last_question_text"),
-                answer_topics=request.session.get("last_answer_topics", []),
-            )
-        except Exception:
-            question = None
+    should_force_followup = (
+        len(answer_tokens) >= 6
+        and phase in {"resume", "project"}
+        and followup_depth < max_depth
+    )
+    if should_force_followup:
+        followup = _build_real_interviewer_followup(
+            last_answer=last_answer,
+            current_project=current_project,
+            anchor_topic=anchor_topic,
+            followup_depth=followup_depth,
+            last_question_text=last_question_text,
+        )
+        if followup and not _is_redundant_question(followup, previous_questions):
+            question = followup
+            used_forced_followup = True
 
-        if question:
-            if _is_redundant_question(question, previous_questions):
-                question = None
-                # Shift anchor when duplicate meaning is detected to force topic movement.
-                anchor_topic = _choose_anchor_topic(
-                    phase=phase,
-                    concepts=concepts,
+    if not question:
+        for _ in range(8):
+            try:
+                question = generate_dynamic_question(
+                    jd_text=jd_text,
+                    resume_text=resume_text,
+                    last_answer=last_answer,
+                    stage=stage,
+                    asked_questions=asked_questions,
+                    remaining_time_minutes=remaining_minutes,
                     current_project=current_project,
+                    concepts=concepts,
+                    projects=projects,
                     project_tech_map=request.session.get("project_tech_map", {}),
-                    topic_question_count=topic_question_count,
+                    anchor_topic=anchor_topic,
+                    last_question=request.session.get("last_question_text"),
                     answer_topics=request.session.get("last_answer_topics", []),
-                    recent_anchor_topics=(request.session.get("recent_anchor_topics", []) + [anchor_topic]),
+                    followup_depth=followup_depth,
                 )
-                continue
-            break
+            except Exception:
+                question = None
+
+            if question:
+                if _is_redundant_question(question, previous_questions):
+                    question = None
+                    # Shift anchor when duplicate meaning is detected to force topic movement.
+                    anchor_topic = _choose_anchor_topic(
+                        phase=phase,
+                        concepts=concepts,
+                        current_project=current_project,
+                        project_tech_map=request.session.get("project_tech_map", {}),
+                        topic_question_count=topic_question_count,
+                        answer_topics=request.session.get("last_answer_topics", []),
+                        recent_anchor_topics=(request.session.get("recent_anchor_topics", []) + [anchor_topic]),
+                    )
+                    continue
+                break
 
     if not question or len(question.strip()) < 5:
         question = generate_llm_fallback_question(
@@ -690,6 +809,10 @@ def generate_next_question(
     recent_anchor_topics = request.session.get("recent_anchor_topics", [])
     recent_anchor_topics.append(anchor_topic)
     request.session["recent_anchor_topics"] = recent_anchor_topics[-8:]
+    if used_forced_followup:
+        request.session["followup_depth"] = min(max_depth, followup_depth + 1)
+    else:
+        request.session["followup_depth"] = 0
 
     q = InterviewQuestion(interview_id=interview_session.id, question_text=question)
     db.add(q)
