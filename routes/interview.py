@@ -20,6 +20,7 @@ client = OpenAI()
 INTERVIEW_DURATION = 20
 MIN_RESUME_QUESTIONS = 2
 MIN_HR_QUESTIONS = 2
+FILLER_PATTERN = r"\b(um|uh|like|you know|basically|actually|sort of|kind of)\b"
 
 
 def _normalize_question(text: str) -> str:
@@ -413,6 +414,77 @@ def _build_real_interviewer_followup(
     return None
 
 
+def _score_interview_answer(question_text: str, answer_text: str, resume_text: str, jd_text: str) -> tuple[float, str]:
+    answer = (answer_text or "").strip()
+    if not answer:
+        return 0.0, "No answer captured."
+
+    answer_tokens = re.findall(r"[a-zA-Z0-9+#./-]+", answer.lower())
+    question_tokens = _content_tokens(question_text)
+    resume_tokens = _content_tokens(resume_text or "")
+    jd_tokens = _content_tokens(jd_text or "")
+    answer_token_set = set(answer_tokens)
+
+    word_count = len(answer_tokens)
+    length_score = min(30.0, word_count * 0.45)
+    relevance_overlap = len(answer_token_set & question_tokens) / max(1, len(question_tokens)) if question_tokens else 0.4
+    resume_overlap = len(answer_token_set & resume_tokens) / max(1, min(18, len(resume_tokens))) if resume_tokens else 0
+    jd_overlap = len(answer_token_set & jd_tokens) / max(1, min(18, len(jd_tokens))) if jd_tokens else 0
+
+    metrics_bonus = 10 if re.search(r"\b\d+(\.\d+)?\s*(%|ms|sec|seconds|minutes|hours|x|k|m|gb|mb|rps|qps)\b", answer.lower()) else 0
+    impact_bonus = 8 if re.search(r"\b(improved|reduced|increased|optimized|scaled|designed|implemented|debugged|deployed|measured)\b", answer.lower()) else 0
+    tradeoff_bonus = 8 if re.search(r"\b(trade[- ]?off|because|instead|rather than|challenge|constraint)\b", answer.lower()) else 0
+    filler_penalty = min(10, len(re.findall(FILLER_PATTERN, answer.lower())) * 2)
+
+    score = (
+        length_score
+        + relevance_overlap * 30
+        + resume_overlap * 12
+        + jd_overlap * 12
+        + metrics_bonus
+        + impact_bonus
+        + tradeoff_bonus
+        - filler_penalty
+    )
+    score = round(max(0.0, min(100.0, score)), 2)
+
+    if score >= 80:
+        summary = "Strong answer with clear relevance, supporting detail, and concrete signals."
+    elif score >= 65:
+        summary = "Good answer with useful relevance, but it could include sharper evidence or tradeoffs."
+    elif score >= 45:
+        summary = "Partially relevant answer, but it lacks depth or concrete outcomes."
+    else:
+        summary = "Weak answer due to low detail, weak relevance, or missing supporting evidence."
+
+    return score, summary
+
+
+def _persist_answer_score(
+    question_record: Optional[InterviewQuestion],
+    answer_text: str,
+    resume_text: str,
+    jd_text: str,
+):
+    if not question_record or not (answer_text or "").strip():
+        return
+
+    question_record.answer_text = _prefer_richer_answer(question_record.answer_text or "", answer_text)
+    score, reason = _score_interview_answer(question_record.question_text, question_record.answer_text, resume_text, jd_text)
+    question_record.score = score
+    question_record.score_reason = reason
+
+
+def _build_overall_feedback(final_score: float, violation_count: int) -> str:
+    if final_score >= 80 and violation_count == 0:
+        return "Strong interview performance with good detail, relevance, and no integrity concerns."
+    if final_score >= 65:
+        return "Good interview performance with some gaps in depth or precision."
+    if final_score >= 50:
+        return "Mixed interview performance. Candidate showed some knowledge but lacked consistency."
+    return "Interview performance was below expectation based on answer quality and/or integrity concerns."
+
+
 @router.get("/interview/{result_id}")
 def interview_page(
     result_id: int,
@@ -432,6 +504,7 @@ def interview_page(
     interview_session = _ensure_interview_session(db, result)
     if interview_session.status == "not_started":
         interview_session.status = "scheduled"
+        result.pipeline_status = "scheduled"
         db.commit()
 
     request.session.clear()
@@ -464,6 +537,8 @@ def generate_next_question(
         return {"question": "Interview session error."}
 
     interview_session = _ensure_interview_session(db, result)
+    jd_text = extract_text_from_file(job.jd_text)
+    resume_text = extract_text_from_file(candidate.resume_path or "")
 
     if request.session.get("interview_initialized") is None:
         request.session["interview_initialized"] = True
@@ -509,6 +584,7 @@ def generate_next_question(
         result.interview_start_time = interview_session.started_at.isoformat()
         result.interview_end_time = None
         result.interview_abandoned = False
+        result.pipeline_status = "in_progress"
         db.commit()
 
         _append_timeline(request, "Interview started")
@@ -518,7 +594,7 @@ def generate_next_question(
     if last_question_id and last_answer.strip():
         prev_q = db.query(InterviewQuestion).filter(InterviewQuestion.id == last_question_id).first()
         if prev_q:
-            prev_q.answer_text = _prefer_richer_answer(prev_q.answer_text or "", last_answer)
+            _persist_answer_score(prev_q, last_answer, resume_text, jd_text)
             db.commit()
             _append_timeline(request, "Candidate answered a question")
 
@@ -584,8 +660,6 @@ def generate_next_question(
         _append_timeline(request, "Question asked")
         return {"question": intro}
 
-    jd_text = extract_text_from_file(job.jd_text)
-    resume_text = extract_text_from_file(candidate.resume_path or "")
     resume_lower = resume_text.lower()
     resume_topics = _extract_resume_topics(resume_text)
 
@@ -849,6 +923,10 @@ async def complete_interview(request: Request, db: Session = Depends(get_db)):
         return JSONResponse(status_code=404, content={"error": "Result not found"})
 
     interview_session = _ensure_interview_session(db, result)
+    candidate = db.query(Candidate).filter(Candidate.id == result.candidate_id).first()
+    job = db.query(JobDescription).filter(JobDescription.id == result.job_id).first()
+    resume_text = extract_text_from_file(candidate.resume_path or "") if candidate else ""
+    jd_text = extract_text_from_file(job.jd_text) if job else ""
     now = datetime.now()
     if not interview_session.started_at:
         interview_session.started_at = now
@@ -858,6 +936,7 @@ async def complete_interview(request: Request, db: Session = Depends(get_db)):
     interview_session.status = status
     interview_session.completed = status == "completed"
     interview_session.abandoned = status != "completed"
+    result.pipeline_status = "completed" if status == "completed" else "abandoned"
 
     # Persist pending answer if interview ends before next question fetch.
     pending_answer = (data.get("last_answer") or "").strip()
@@ -865,7 +944,7 @@ async def complete_interview(request: Request, db: Session = Depends(get_db)):
     if last_question_id and pending_answer:
         prev_q = db.query(InterviewQuestion).filter(InterviewQuestion.id == last_question_id).first()
         if prev_q:
-            prev_q.answer_text = _prefer_richer_answer(prev_q.answer_text or "", pending_answer)
+            _persist_answer_score(prev_q, pending_answer, resume_text, jd_text)
             _append_timeline(request, "Candidate answered final question")
 
     incoming_violations = data.get("violations", []) or []
@@ -894,6 +973,30 @@ async def complete_interview(request: Request, db: Session = Depends(get_db)):
         "duration_seconds": duration_sec,
         "status": interview_session.status,
     }
+    questions = (
+        db.query(InterviewQuestion)
+        .filter(InterviewQuestion.interview_id == interview_session.id)
+        .order_by(InterviewQuestion.id.asc())
+        .all()
+    )
+    scored_questions = [float(question.score) for question in questions if question.score is not None]
+    average_question_score = round(sum(scored_questions) / len(scored_questions), 2) if scored_questions else 0.0
+    violation_penalty = min(20, len(all_violations) * 4)
+    final_score = round(max(0.0, average_question_score - violation_penalty), 2)
+
+    interview_session.final_score = final_score
+    interview_session.overall_feedback = _build_overall_feedback(final_score, len(all_violations))
+    existing_explanation["interview_report"]["question_scores"] = [
+        {
+            "id": question.id,
+            "question": question.question_text,
+            "score": question.score,
+            "score_reason": question.score_reason,
+        }
+        for question in questions
+    ]
+    existing_explanation["interview_report"]["final_score"] = final_score
+    existing_explanation["interview_report"]["overall_feedback"] = interview_session.overall_feedback
     result.explanation = existing_explanation
 
     db.commit()

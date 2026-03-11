@@ -1,9 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import axios from 'axios';
 import { FaceDetection } from '@mediapipe/face_detection';
 import { Camera } from '@mediapipe/camera_utils';
-import Navbar from '../components/Navbar';
+import api from '../lib/api';
+import {
+  getPreferredVoices,
+  getStoredVoicePreference,
+  persistVoicePreference
+} from '../utils/voiceOptions';
 
 const MEDIAPIPE_FACE_DETECTION_VERSION = '0.4.1646425229';
 
@@ -26,6 +30,8 @@ function InterviewSession() {
   const [timelineEvents, setTimelineEvents] = useState([]);
   const [isBotSpeaking, setIsBotSpeaking] = useState(false);
   const [botViseme, setBotViseme] = useState('rest');
+  const [botVoice, setBotVoice] = useState(getStoredVoicePreference());
+  const [voiceCatalog, setVoiceCatalog] = useState({ female: null, male: null });
 
   const MAX_WARNINGS_PER_TYPE = 5;
 
@@ -164,7 +170,7 @@ function InterviewSession() {
     setTimeout(() => setWarningMessage(''), 3000);
 
     try {
-      await axios.post('/log-violation', { reason });
+      await api.post('/log-violation', { reason });
     } catch (error) {
       // no-op
     }
@@ -175,10 +181,20 @@ function InterviewSession() {
   };
 
   useEffect(() => {
+    const loadVoices = () => {
+      const synth = window.speechSynthesis;
+      if (!synth) {
+        setVoiceCatalog({ female: null, male: null });
+        return;
+      }
+
+      setVoiceCatalog(getPreferredVoices(synth.getVoices()));
+    };
+
     const loadInterview = async () => {
       try {
         const token = new URLSearchParams(window.location.search).get('token');
-        const res = await axios.get(`/interview/${resultId}?token=${token}`);
+        const res = await api.get(`/interview/${resultId}?token=${token}`);
         setCandidateName(res.data.candidate_name || '');
         setInterviewDuration(res.data.interview_duration || 0);
         setTimeRemaining(`${String(res.data.interview_duration || 0).padStart(2, '0')}:00`);
@@ -188,7 +204,11 @@ function InterviewSession() {
       }
     };
 
+    loadVoices();
     loadInterview();
+    if (window.speechSynthesis) {
+      window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
+    }
 
     return () => {
       clearInterval(countdownRef.current);
@@ -205,6 +225,9 @@ function InterviewSession() {
         audioStreamRef.current.getTracks().forEach((track) => track.stop());
       }
       stopAIMonitoring();
+      if (window.speechSynthesis) {
+        window.speechSynthesis.removeEventListener('voiceschanged', loadVoices);
+      }
     };
   }, [resultId]);
 
@@ -268,6 +291,11 @@ function InterviewSession() {
   const speak = (text, callback = null) => {
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
+    const selectedVoice = botVoice === 'male' ? voiceCatalog.male : voiceCatalog.female;
+    if (selectedVoice) {
+      utter.voice = selectedVoice;
+      utter.lang = selectedVoice.lang || 'en-US';
+    }
     utter.onstart = () => setIsBotSpeaking(true);
     utter.onend = () => {
       setIsBotSpeaking(false);
@@ -278,6 +306,12 @@ function InterviewSession() {
       callback && callback();
     };
     window.speechSynthesis.speak(utter);
+  };
+
+  const handleVoiceChange = (voiceType) => {
+    const nextVoice = voiceType === 'male' ? 'male' : 'female';
+    setBotVoice(nextVoice);
+    persistVoicePreference(nextVoice);
   };
 
   const startTimer = () => {
@@ -417,7 +451,7 @@ function InterviewSession() {
       formData.append('sequence_id', String(chunk.sequence_id));
       formData.append('context_hint', currentQuestionRef.current || '');
 
-      axios
+      api
         .post('/transcribe-audio', formData)
         .then((res) => {
           if (!res?.data?.success) return;
@@ -500,7 +534,7 @@ function InterviewSession() {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       try {
         if (flush) {
-          await new Promise((resolve) => {
+          await new Promise<void>((resolve) => {
             let done = false;
             const settle = () => {
               if (done) return;
@@ -661,7 +695,7 @@ function InterviewSession() {
       formData.append('result_id', resultId);
       formData.append('last_answer', '');
 
-      const res = await axios.post('/generate-next-question', formData);
+      const res = await api.post('/generate-next-question', formData);
       if (!res.data.question || res.data.question === 'INTERVIEW_COMPLETE') {
         await endInterview('completed');
         return;
@@ -708,7 +742,7 @@ function InterviewSession() {
 
       addTimeline('Answer submitted');
 
-      const res = await axios.post('/generate-next-question', formData);
+      const res = await api.post('/generate-next-question', formData);
       if (!res.data.question || res.data.question === 'INTERVIEW_COMPLETE') {
         await endInterview('completed');
         return;
@@ -795,7 +829,7 @@ function InterviewSession() {
     addTimeline('Interview ended');
 
     try {
-      await axios.post('/complete-interview', {
+      await api.post('/complete-interview', {
         result_id: Number(resultId),
         status,
         last_answer: normalizeTranscript(
@@ -857,46 +891,96 @@ function InterviewSession() {
     };
   }, [answer, interviewEnded, interviewStarted, questionTimeLeft, questionWindowSec, violationCount]);
 
+  const sessionIdLabel = resultId ? `#${String(resultId).padStart(3, '0')}-941` : '#882-941';
+  const progressPercent = clamp((Math.max(questionIndex, interviewStarted ? 1 : 0) / 20) * 100, 4, 100);
+  const questionLabel = questionIndex > 0 ? `Step ${questionIndex} of 20` : 'Step 0 of 20';
+  const keywords = Array.from<string>(
+    new Set(
+      normalizeTranscript(answer || '')
+        .split(/\s+/)
+        .map((word) => word.replace(/[^a-zA-Z0-9#+.-]/g, '').trim())
+        .filter((word) => word.length > 4)
+    )
+  ).slice(0, 4);
+  const aiSuggestion = interviewStarted
+    ? liveAnalysis.completenessScore < 45
+      ? 'Prompt the candidate to ground the answer in one production example.'
+      : liveAnalysis.clarityScore < 55
+        ? 'Follow up on structure and trade-offs before moving to the next topic.'
+        : 'Candidate is progressing well. Next prompt can probe implementation depth.'
+    : 'Interview has not started yet. Start the session to activate live guidance.';
+
   return (
-    <>
-      <Navbar showLogout />
-      <div className="ib-shell ib-session-shell">
-        <div className="ib-session-bg orb-one" />
-        <div className="ib-session-bg orb-two" />
+    <div className="ib-shell ib-session-shell ib-session-shell-v2">
+      <div className="ib-session-bg orb-one" />
+      <div className="ib-session-bg orb-two" />
 
-        <div className="ib-container ib-session-layout">
-          <section className="ib-card ib-session-hero">
+      <div className="ib-container ib-session-layout ib-session-layout-v2">
+        <section className="ib-session-topbar">
+          <div className="ib-session-brand">
+            <div className="ib-logo-mark">I</div>
             <div>
-              <div className="ib-kicker">Interview Mission Control</div>
-              <h2 className="ib-session-title">Real-Time Interview Session</h2>
-              <p className="ib-session-subtitle">
-                AI interviewer asks dynamic questions and adapts depth based on candidate responses.
-              </p>
+              <div className="ib-session-brand-title">InterviewBot Live</div>
+              <div className="ib-session-brand-meta">Session ID: {sessionIdLabel}</div>
             </div>
-            <div className="ib-session-chips">
-              <span className="ib-chip ib-chip-brand">Candidate: {candidateName || 'Loading...'}</span>
-              <span className="ib-chip ib-chip-success">Mode: {liveAnalysis.mode}</span>
-              <span className="ib-chip ib-chip-danger">Risk: {liveAnalysis.riskLevel}%</span>
-            </div>
-          </section>
+          </div>
+          <div className="ib-session-top-actions">
+            <span className="ib-session-recording">
+              <span className="ib-session-recording-dot" />
+              {interviewEnded ? 'SESSION CLOSED' : 'LIVE RECORDING'}
+            </span>
+            <button
+              onClick={() => endInterview('abandoned')}
+              disabled={interviewEnded}
+              className="ib-session-end-btn"
+            >
+              End Session
+            </button>
+          </div>
+        </section>
 
-          <div className="ib-session-main-grid">
-            <section className="ib-card ib-p-24 ib-control-card">
-              {warningMessage && <div className="alert alert-warning">{warningMessage}</div>}
-
-              <div className={`ib-live-strip ${isBotSpeaking ? 'is-speaking' : ''}`}>
-                <div className="ib-live-dot" />
-                <span>Live Interview Bot</span>
-                {isBotSpeaking && (
-                  <div className="ib-voice-bars" aria-label="Bot is speaking">
-                    <span />
-                    <span />
-                    <span />
-                    <span />
-                  </div>
-                )}
+        <section className="ib-session-metrics-row">
+          <article className="ib-session-metric-card">
+            <div className="ib-kicker">Total Duration</div>
+            <div className="ib-session-metric-value ib-session-metric-mono">{timeRemaining}</div>
+          </article>
+          <article className="ib-session-metric-card">
+            <div className="ib-kicker">Question Timer</div>
+            <div className="ib-session-metric-split">
+              <div className="ib-session-metric-value ib-session-metric-mono">
+                {String(Math.max(questionTimeLeft, 0)).padStart(2, '0')}s
               </div>
+              <span>Limit: {String(questionWindowSec || 0).padStart(2, '0')}s</span>
+            </div>
+          </article>
+          <article className="ib-session-metric-card ib-session-progress-card">
+            <div className="ib-session-progress-head">
+              <div className="ib-kicker">Interview Progress</div>
+              <strong>{questionLabel}</strong>
+            </div>
+            <div className="ib-session-progress-track">
+              <div className="ib-session-progress-fill" style={{ width: `${progressPercent}%` }} />
+            </div>
+            <div className="ib-session-progress-note">{liveAnalysis.mode}</div>
+          </article>
+        </section>
 
+        <div className="ib-session-grid-v2">
+          <section className="ib-card ib-session-stage-card">
+            {warningMessage && <div className="alert alert-warning">{warningMessage}</div>}
+
+            <div className="ib-session-stage-head">
+              <div className="ib-session-stage-title">
+                <span className="ib-session-stage-icon">🤖</span>
+                <span>AI Interviewer: Astra</span>
+              </div>
+              <div className="ib-session-audio-state">
+                <span className="ib-session-audio-dot" />
+                Audio Processing Active
+              </div>
+            </div>
+
+            <div className="ib-session-avatar-stage">
               <div className={`ib-bot-avatar ${isBotSpeaking ? 'is-speaking' : ''}`} aria-label="Interviewer avatar">
                 <svg className="ib-bot-svg" viewBox="0 0 140 170" role="img" aria-label="AI interviewer face">
                   <defs>
@@ -955,137 +1039,183 @@ function InterviewSession() {
                   </g>
                 </svg>
               </div>
+            </div>
 
-              <div className="ib-control-top">
-                <div className="ib-timer-wrap">
-                  <div className="ib-kicker">Session Clock</div>
-                  <div className="ib-timer">{timeRemaining}</div>
-                </div>
-                <div className="ib-timer-wrap">
-                  <div className="ib-kicker">Question Window</div>
-                  <div className="ib-qtime">{questionTimeLeft}s</div>
-                </div>
-                <div className="ib-timer-wrap">
-                  <div className="ib-kicker">Question #</div>
-                  <div className="ib-qtime">{questionIndex || '-'}</div>
-                </div>
+            <div className="ib-session-question-card">
+              <div className="ib-question-head">
+                <span>Current Question</span>
+                <span className={`ib-speaking-badge ${isBotSpeaking ? 'on' : ''}`}>
+                  {isBotSpeaking ? 'Speaking...' : 'Waiting'}
+                </span>
               </div>
+              <div className="ib-session-question-text">{question}</div>
+            </div>
 
-              <div className={`ib-question ib-question-panel ${isBotSpeaking ? 'is-speaking' : ''}`}>
-                <div className="ib-question-head">
-                  <span>Interviewer Question</span>
-                  <span className={`ib-speaking-badge ${isBotSpeaking ? 'on' : ''}`}>
-                    {isBotSpeaking ? 'Speaking...' : 'Waiting'}
-                  </span>
-                </div>
-                <div>{question}</div>
+            <section className="ib-session-transcript-panel">
+              <div className="ib-session-panel-label">Live Transcript</div>
+              <div className="ib-session-transcript-content">
+                <p><strong>Astra:</strong> {question}</p>
+                <p><strong>Candidate:</strong> {answer || 'Transcript will appear here once the candidate starts answering.'}</p>
               </div>
-
-              <label className="ib-kicker mt-3">Candidate Live Transcript</label>
-              <textarea value={answer} readOnly className="form-control ib-live-transcript" />
-
-              <div className="d-flex gap-2 mt-3 flex-wrap">
-                <button
-                  onClick={startInterview}
-                  disabled={interviewStarted || interviewEnded}
-                  className="btn ib-btn-session-primary"
-                >
-                  Start Interview
-                </button>
-
-                <button
-                  onClick={() => nextQuestion(streamRef.current)}
-                  disabled={!interviewStarted || interviewEnded}
-                  className="btn btn-outline-dark"
-                >
-                  Submit & Next
-                </button>
-
-                <button onClick={() => endInterview('abandoned')} disabled={interviewEnded} className="btn btn-outline-danger">
-                  End Session
-                </button>
-              </div>
-              <div className="small text-muted mt-2">{statusText}</div>
             </section>
 
-            <aside className="ib-side-stack">
-              <section className="ib-card ib-p-24 ib-video-card">
-                <div className="ib-kicker">Proctoring Feed</div>
-                <video ref={videoRef} autoPlay muted playsInline className="ib-video-preview" />
-                <div className="ib-video-overlay">AI Vision Monitoring Active</div>
-                <div className="small text-muted mt-3 ib-status mb-2">
-                  Violations logged: <strong>{violationCount}</strong>
-                </div>
-                <div className="small text-muted ib-status mb-0">
-                  Transcription low-confidence chunks: <strong>{lowConfidenceChunksRef.current}</strong>
-                </div>
-              </section>
+            <div className="ib-voice-panel ib-session-voice-panel">
+              <div className="ib-kicker">Interviewer Voice Profile</div>
+              <div className="ib-voice-choice-grid">
+                <label className={`ib-voice-option ${botVoice === 'female' ? 'selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="sessionBotVoice"
+                    value="female"
+                    checked={botVoice === 'female'}
+                    onChange={() => handleVoiceChange('female')}
+                  />
+                  <span>Female Voice</span>
+                </label>
+                <label className={`ib-voice-option ${botVoice === 'male' ? 'selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="sessionBotVoice"
+                    value="male"
+                    checked={botVoice === 'male'}
+                    onChange={() => handleVoiceChange('male')}
+                  />
+                  <span>Male Voice</span>
+                </label>
+              </div>
+              <div className="ib-help">
+                Active voice: {(botVoice === 'male' ? voiceCatalog.male?.name : voiceCatalog.female?.name) || 'Browser default'}
+              </div>
+            </div>
 
-              <section className="ib-card ib-p-24 ib-analysis-card">
-                <div className="ib-kicker">Candidate Analysis</div>
-                <div className="ib-analysis-grid">
-                  <div className="ib-stat">
-                    <div className="ib-stat-label">Words spoken</div>
-                    <div className="ib-stat-value">{liveAnalysis.words}</div>
-                  </div>
-                  <div className="ib-stat">
-                    <div className="ib-stat-label">Speaking pace</div>
-                    <div className="ib-stat-value">{liveAnalysis.wpm} WPM</div>
-                  </div>
-                </div>
+            <div className="ib-session-control-row">
+              <button
+                onClick={startInterview}
+                disabled={interviewStarted || interviewEnded}
+                className="ib-btn-session-primary"
+              >
+                Start Interview
+              </button>
+              <button
+                onClick={() => nextQuestion(streamRef.current)}
+                disabled={!interviewStarted || interviewEnded}
+                className="ib-session-secondary-btn"
+              >
+                Submit & Next
+              </button>
+              <div className="ib-session-status-copy">{statusText}</div>
+            </div>
+          </section>
 
-                <div className="ib-score-row">
-                  <div className="ib-score-row-head">
-                    <span>Confidence</span>
-                    <strong>{liveAnalysis.confidenceScore}%</strong>
-                  </div>
-                  <div className="ib-score-track">
-                    <div className="ib-score-fill ib-score-brand" style={{ width: `${liveAnalysis.confidenceScore}%` }} />
-                  </div>
-                </div>
+          <aside className="ib-session-side-v2">
+            <section className="ib-card ib-session-camera-card">
+              <div className="ib-session-camera-frame">
+                <span className="ib-session-camera-chip">Camera On</span>
+                <video ref={videoRef} autoPlay muted playsInline className="ib-video-preview ib-session-video-preview" />
+                <div className="ib-session-face-guide" />
+              </div>
 
-                <div className="ib-score-row">
-                  <div className="ib-score-row-head">
-                    <span>Clarity</span>
-                    <strong>{liveAnalysis.clarityScore}%</strong>
-                  </div>
-                  <div className="ib-score-track">
-                    <div className="ib-score-fill ib-score-success" style={{ width: `${liveAnalysis.clarityScore}%` }} />
-                  </div>
+              <div className="ib-session-violation-grid">
+                <div className="ib-session-violation-box danger">
+                  <span>Gaze Deviations</span>
+                  <strong>{violationCount}</strong>
                 </div>
-
-                <div className="ib-score-row">
-                  <div className="ib-score-row-head">
-                    <span>Completeness</span>
-                    <strong>{liveAnalysis.completenessScore}%</strong>
-                  </div>
-                  <div className="ib-score-track">
-                    <div className="ib-score-fill ib-score-danger" style={{ width: `${liveAnalysis.completenessScore}%` }} />
-                  </div>
+                <div className="ib-session-violation-box">
+                  <span>Tab Switches</span>
+                  <strong>{timelineEvents.filter((entry) => entry.event.toLowerCase().includes('tab')).length}</strong>
                 </div>
-
-                <div className="ib-analysis-note">
-                  Fillers: <strong>{liveAnalysis.fillerCount}</strong> | Sentences: <strong>{liveAnalysis.sentenceCount}</strong>
+                <div className="ib-session-violation-box">
+                  <span>Audio Events</span>
+                  <strong>{lowConfidenceChunksRef.current}</strong>
                 </div>
-              </section>
+                <div className="ib-session-violation-box">
+                  <span>Multi-face</span>
+                  <strong>{violationsRef.current.filter((entry) => entry.type === 'multi').length}</strong>
+                </div>
+              </div>
+            </section>
 
-              <section className="ib-card ib-p-24 ib-timeline-card">
-                <div className="ib-kicker">Session Trail</div>
-                <ul className="ib-session-trail">
-                  {timelineEvents.length === 0 && <li>Awaiting interview events...</li>}
-                  {timelineEvents.map((entry, idx) => (
-                    <li key={`${entry.time}-${idx}`}>
-                      <span>{entry.event}</span>
-                      <small>{new Date(entry.time).toLocaleTimeString()}</small>
-                    </li>
+            <section className="ib-card ib-session-insight-card">
+              <div className="ib-kicker">Candidate Insights (Live)</div>
+              <div className="ib-score-row">
+                <div className="ib-score-row-head">
+                  <span>Confidence Score</span>
+                  <strong>{liveAnalysis.confidenceScore}%</strong>
+                </div>
+                <div className="ib-score-track">
+                  <div className="ib-score-fill ib-score-brand" style={{ width: `${liveAnalysis.confidenceScore}%` }} />
+                </div>
+              </div>
+
+              <div className="ib-session-live-note">
+                <div className="ib-session-live-note-head">
+                  <span>Clarity & Pace</span>
+                  <strong>{liveAnalysis.paceScore >= 70 ? 'Optimal' : 'Watch'}</strong>
+                </div>
+                <p>
+                  Speaker is maintaining roughly {liveAnalysis.wpm || 0} words per minute with clarity at {liveAnalysis.clarityScore}%.
+                </p>
+              </div>
+
+              <div className="ib-session-live-note">
+                <div className="ib-session-live-note-head">
+                  <span>Keywords Detected</span>
+                </div>
+                <div className="ib-session-keywords">
+                  {(keywords.length > 0 ? keywords : ['response', 'analysis', 'system', 'design']).map((keyword) => (
+                    <span key={keyword} className="ib-session-keyword-chip">
+                      {keyword}
+                    </span>
                   ))}
-                </ul>
-              </section>
-            </aside>
-          </div>
+                </div>
+              </div>
+
+              <div className="ib-session-live-note">
+                <div className="ib-session-live-note-head">
+                  <span>AI Suggestion</span>
+                </div>
+                <p>{aiSuggestion}</p>
+              </div>
+            </section>
+
+            <section className="ib-card ib-session-analysis-card-v2">
+              <div className="ib-kicker">Candidate Analysis</div>
+              <div className="ib-analysis-grid">
+                <div className="ib-stat">
+                  <div className="ib-stat-label">Words spoken</div>
+                  <div className="ib-stat-value">{liveAnalysis.words}</div>
+                </div>
+                <div className="ib-stat">
+                  <div className="ib-stat-label">Speaking pace</div>
+                  <div className="ib-stat-value">{liveAnalysis.wpm} WPM</div>
+                </div>
+                <div className="ib-stat">
+                  <div className="ib-stat-label">Filler count</div>
+                  <div className="ib-stat-value">{liveAnalysis.fillerCount}</div>
+                </div>
+                <div className="ib-stat">
+                  <div className="ib-stat-label">Sentences</div>
+                  <div className="ib-stat-value">{liveAnalysis.sentenceCount}</div>
+                </div>
+              </div>
+            </section>
+
+            <section className="ib-card ib-session-trail-card-v2">
+              <div className="ib-kicker">Session Trail</div>
+              <ul className="ib-session-trail">
+                {timelineEvents.length === 0 && <li>Awaiting interview events...</li>}
+                {timelineEvents.map((entry, idx) => (
+                  <li key={`${entry.time}-${idx}`}>
+                    <span>{entry.event}</span>
+                    <small>{new Date(entry.time).toLocaleTimeString()}</small>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          </aside>
         </div>
       </div>
-    </>
+    </div>
   );
 }
 

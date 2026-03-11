@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from models import Base, Candidate, HR
+from sqlalchemy import inspect, text
 from routes import candidate, hr, interview, analysis
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
@@ -17,6 +18,15 @@ from starlette.middleware.sessions import SessionMiddleware
 # Load Environment Variables
 # --------------------------------------------------
 load_dotenv()
+
+
+def _parse_frontend_origins() -> list[str]:
+    configured = os.getenv("FRONTEND_ORIGINS", "").strip()
+    if configured:
+        return [origin.strip() for origin in configured.split(",") if origin.strip()]
+
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000").strip()
+    return [frontend_url]
 
 
 # --------------------------------------------------
@@ -30,7 +40,7 @@ app = FastAPI(docs_url=None, redoc_url=None)
 # --------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_parse_frontend_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -65,6 +75,25 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 # Database Setup
 # --------------------------------------------------
 Base.metadata.create_all(bind=engine)
+
+
+def _ensure_column(table_name: str, column_name: str, column_sql: str):
+    inspector = inspect(engine)
+    existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+    if column_name in existing_columns:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}"))
+
+
+_ensure_column("results", "pipeline_status", "VARCHAR(50)")
+_ensure_column("results", "hr_decision", "VARCHAR(50)")
+_ensure_column("results", "recruiter_notes", "TEXT")
+_ensure_column("results", "recruiter_feedback", "TEXT")
+_ensure_column("results", "report_generated_at", "TIMESTAMP")
+_ensure_column("interview_questions", "score_reason", "TEXT")
+_ensure_column("jobs", "role_name", "VARCHAR(200)")
 
 
 # --------------------------------------------------

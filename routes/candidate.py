@@ -1,12 +1,14 @@
+import os
 import shutil
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from ai_engine.matching import final_score
 from database import SessionLocal
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
-from models import Candidate, JobDescription, Result
+from models import Candidate, InterviewSession, JobDescription, Result
 from sqlalchemy.orm import Session
 from utils.email_service import send_interview_email
 from utils.file_reader import extract_text_from_pdf
@@ -15,6 +17,7 @@ router = APIRouter()
 
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
 
 # --------------------------------------------------
 # DB Dependency
@@ -33,6 +36,26 @@ def get_current_user(request: Request, db: Session):
     user_id = request.session["user_id"]
     role = request.session.get("role")
     return {"user_id": user_id, "role": role}
+
+
+def _derive_pipeline_status(result: Result | None) -> str:
+    if not result:
+        return "apply"
+    if result.pipeline_status:
+        return result.pipeline_status
+    if result.interview_abandoned:
+        return "abandoned"
+    if result.interview_end_time:
+        return "completed"
+    if result.interview_start_time:
+        return "in_progress"
+    if result.interview_date:
+        return "scheduled"
+    if result.shortlisted:
+        return "shortlisted"
+    if result.screening_completed:
+        return "rejected"
+    return "applied"
 
 
 # --------------------------------------------------
@@ -82,6 +105,10 @@ def candidate_dashboard(request: Request, db: Session = Depends(get_db)):
             "shortlisted": result.shortlisted,
             "interview_date": str(result.interview_date) if result.interview_date else None,
             "explanation": result.explanation,
+            "pipeline_status": _derive_pipeline_status(result),
+            "hr_decision": result.hr_decision,
+            "recruiter_notes": result.recruiter_notes,
+            "recruiter_feedback": result.recruiter_feedback,
         } if result else None,
         "available_jds": jd_list,
     })
@@ -145,6 +172,7 @@ def upload_resume(
     )
 
     shortlisted = score >= 60
+    pipeline_status = "shortlisted" if shortlisted else "rejected"
 
     questions = None
 
@@ -171,6 +199,9 @@ def upload_resume(
         shortlisted=shortlisted,
         explanation=explanation,
         interview_questions=questions if shortlisted else None,
+        screening_completed=True,
+        screened_at=datetime.utcnow(),
+        pipeline_status=pipeline_status,
     )
 
     db.add(new_result)
@@ -203,11 +234,34 @@ def select_interview_date(
 
     result.interview_token = meeting_token
 
-    interview_link = f"http://localhost:3000/interview/{result.id}?token={meeting_token}"
+    interview_link = f"{FRONTEND_URL}/interview/{result.id}?token={meeting_token}"
 
     result.interview_date = interview_date
     result.interview_link = interview_link
+    result.pipeline_status = "scheduled"
 
+    db.commit()
+
+    interview_session = (
+        db.query(InterviewSession)
+        .filter(InterviewSession.candidate_id == result.candidate_id)
+        .filter(InterviewSession.job_id == result.job_id)
+        .order_by(InterviewSession.id.desc())
+        .first()
+    )
+    if not interview_session:
+        interview_session = InterviewSession(
+            candidate_id=result.candidate_id,
+            job_id=result.job_id,
+            status="scheduled",
+        )
+        db.add(interview_session)
+
+    try:
+        interview_session.scheduled_at = datetime.fromisoformat(interview_date)
+    except ValueError:
+        interview_session.scheduled_at = None
+    interview_session.status = "scheduled"
     db.commit()
 
     candidate = db.query(Candidate).filter(

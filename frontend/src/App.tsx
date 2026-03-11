@@ -4,14 +4,10 @@ import Login from './pages/Login';
 import Signup from './pages/Signup';
 import DashboardCandidate from './pages/DashboardCandidate';
 import DashboardHR from './pages/DashboardHR';
-import InterviewSetup from "./pages/InterviewSetup";
+import InterviewSetup from './pages/InterviewSetup';
 import InterviewSession from './pages/InterviewSession';
-import axios from 'axios';
-import 'bootstrap/dist/css/bootstrap.min.css';
+import CandidateReport from './pages/CandidateReport';
 import './App.css';
-
-// Configure axios to send cookies
-axios.defaults.withCredentials = true;
 
 function App() {
   return (
@@ -21,6 +17,7 @@ function App() {
         <Route path="/signup" element={<Signup />} />
         <Route path="/candidate/dashboard" element={<DashboardCandidate />} />
         <Route path="/hr/dashboard" element={<DashboardHR />} />
+        <Route path="/hr/report/:resultId" element={<CandidateReport />} />
         <Route path="/interview/:resultId" element={<InterviewSetup />} />
         <Route path="/interview-session/:resultId" element={<InterviewSession />} />
         <Route path="*" element={<Navigate to="/" />} />

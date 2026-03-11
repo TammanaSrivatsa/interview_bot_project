@@ -54,6 +54,7 @@ class JobDescription(Base):
     id = Column(Integer, primary_key=True)
     company_id = Column(Integer, ForeignKey("hr.id"))
     company_name = Column(String(200))
+    role_name = Column(String(200))
     jd_text = Column(String)
     skill_scores = Column(JSON)
     gender_requirement = Column(String(50))
@@ -92,6 +93,11 @@ class Result(Base):
     # SAFE ADDITIONS (no effect on existing workflow)
     screening_completed = Column(Boolean, default=False)
     screened_at = Column(DateTime, nullable=True)
+    pipeline_status = Column(String(50), nullable=True)
+    hr_decision = Column(String(50), nullable=True)
+    recruiter_notes = Column(Text, nullable=True)
+    recruiter_feedback = Column(Text, nullable=True)
+    report_generated_at = Column(DateTime, nullable=True)
 
     candidate = relationship("Candidate", back_populates="results")
     job = relationship("JobDescription", back_populates="results")
@@ -145,5 +151,6 @@ class InterviewQuestion(Base):
     question_text = Column(Text)
     answer_text = Column(Text, nullable=True)
     score = Column(Float, nullable=True)
+    score_reason = Column(Text, nullable=True)
 
     interview = relationship("InterviewSession", back_populates="questions")
