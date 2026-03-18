@@ -1,0 +1,2 @@
+"""Authentication route group."""
+
