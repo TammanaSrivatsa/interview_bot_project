@@ -435,6 +435,44 @@ def _technology_concept_seed(skill: str | None, category: str | None, angle_inde
     return generic[angle_index % len(generic)]
 
 
+def _build_related_topic_clusters(
+    *,
+    resume_skills: Sequence[str],
+    jd_skill_scores: Mapping[str, int],
+    projects: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    jd_ordered = _sorted_jd_skills(jd_skill_scores)
+    resume_ordered = _dedupe_keep_order(list(resume_skills), limit=20)
+    project_skill_map = {
+        str(project.get("title") or "").strip(): _dedupe_keep_order(list(project.get("tech_stack", []) or []), limit=10)
+        for project in projects
+        if str(project.get("title") or "").strip()
+    }
+
+    category_groups: dict[str, list[str]] = {}
+    for skill in _dedupe_keep_order(jd_ordered + resume_ordered, limit=24):
+        category = _skill_category(skill) or "general"
+        category_groups.setdefault(category, []).append(skill)
+
+    clusters: list[dict[str, object]] = []
+    for category, skills in category_groups.items():
+        if not skills:
+            continue
+        clusters.append({
+            "category": category,
+            "skills": _dedupe_keep_order(skills, limit=6),
+            "project_examples": [
+                {
+                    "project_name": project_name,
+                    "skills": [skill for skill in project_skills if any(_normalize(skill) == _normalize(target) for target in skills)],
+                }
+                for project_name, project_skills in project_skill_map.items()
+                if any(any(_normalize(skill) == _normalize(target) for target in skills) for skill in project_skills)
+            ][:4],
+        })
+    return clusters[:8]
+
+
 def _extract_named_segment(pattern: str, text: str) -> str | None:
     match = re.search(pattern, text, re.IGNORECASE)
     if not match:
@@ -1163,6 +1201,11 @@ def _build_llm_prompt(
     ]
     structured_projects = _structured_projects_payload(projects[:4])
     extracted_resume_skills = _dedupe_keep_order(list(resume_skills), limit=20)
+    related_topic_clusters = _build_related_topic_clusters(
+        resume_skills=resume_skills,
+        jd_skill_scores=jd_skill_scores,
+        projects=projects,
+    )
     resume_snippet = re.sub(r"\s+", " ", (resume_text or "").strip())[:2200]
     response_schema = [
         {
@@ -1197,6 +1240,9 @@ JD skills (weighted):
 Structured extracted projects:
 {json.dumps(structured_projects, ensure_ascii=False, indent=2)}
 
+Related technology/topic clusters:
+{json.dumps(related_topic_clusters, ensure_ascii=False, indent=2)}
+
 Hard requirements:
 - The first question must be the introduction question.
 - The last {counts['hr']} question(s) must be HR / behavioral questions.
@@ -1206,6 +1252,11 @@ Hard requirements:
 - Skill questions must be practical and tied to actual project usage, implementation decisions, debugging, architecture, database design, backend logic, validations, performance, concurrency, edge cases, integrations, or deployment choices.
 - Use the technologies and topics explicitly present in the resume. Do not fall back to generic textbook questions.
 - For each important technology mentioned in the resume or JD, prefer concept-heavy questions about behavior, design trade-offs, failure cases, architecture, performance, data flow, accessibility, security, or correctness.
+- For technical questions, prefer direct conceptual questioning over scenario-style phrasing.
+- Avoid repeatedly using phrasing like 'tell me about a time', 'walk me through a real implementation', or other generic scenario wording for technical rounds.
+- Ask about technologies first, but always anchor them to the candidate's real projects, modules, architecture, or integrations.
+- Ask interconnected questions across related topics. For example: frontend structure with state flow and accessibility; Java with Spring and SQL; AWS with deployment and scaling; ML with data, evaluation, and inference.
+- Make the technical questions feel like a strong interviewer probing conceptual understanding of related topics, not asking for stories.
 - If there are multiple projects, cover each project at least once before repeating any single project.
 - If there are at least two projects, include at least one cross-project comparison or transfer-of-learning question.
 - If the project stack contains AI/ML, AWS/cloud, databases, or backend frameworks, ask conceptually deep implementation questions on those exact technologies rather than generic definitions.
